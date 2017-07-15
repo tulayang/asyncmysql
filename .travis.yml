@@ -33,7 +33,6 @@ install:
   # - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then rvm get head; fi # fix osx ``shell_session_update: command not found``
 
 script:
-  # - nim test
-  - nim c -r mysql/packet.nim
+  - nim test
   
   
