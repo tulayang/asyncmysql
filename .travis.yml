@@ -1,0 +1,39 @@
+language: c
+os:
+  - linux
+  - osx
+
+compiler:
+  - gcc
+
+services:
+  mysql
+
+before_install:
+  - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
+      brew install mysql;
+      mysql.server start; 
+    fi
+  - mysql -h 127.0.0.1 -u root -e "create user 'mysql'@'127.0.0.1' identified by '123456';"
+  - mysql -h 127.0.0.1 -u root -e "grant all on *.* to 'mysql'@'127.0.0.1' identified by '123456';"
+
+install:
+  - set -e
+  - git clone -b devel --depth 1 https://github.com/nim-lang/Nim.git
+  - cd Nim
+  - git clone --depth 1 https://github.com/nim-lang/csources.git
+  - cd csources
+  - sh build.sh
+  - cd ..
+  - bin/nim c koch
+  - ./koch boot -d:release
+  - ./koch nimble
+  - export PATH=$(pwd)/bin:$PATH
+  - cd ..
+  # - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then rvm get head; fi # fix osx ``shell_session_update: command not found``
+
+script:
+  # - nim test
+  - nim c -r mysql/packet.nim
+  
+  
