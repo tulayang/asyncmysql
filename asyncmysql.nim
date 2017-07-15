@@ -4,5 +4,5 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import mysql.packet
-export mysql.packet
+import asyncmysql.packet
+export asyncmysql.packet
