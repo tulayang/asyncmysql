@@ -449,7 +449,6 @@ proc token(scrambleBuff: string, password: string): string =
   result = stage3 xor stage1
 
 proc hash323(s: string): tuple[a: uint32, b: uint32] =
-  # TODO: type unit optimize, make more safety
   var nr = 0x50305735'u32
   var add = 7'u32
   var nr2 = 0x12345671'u32
@@ -467,7 +466,6 @@ proc hash323(s: string): tuple[a: uint32, b: uint32] =
   result.b = (nr2 and 0x7FFFFFFF)
 
 proc scramble323(seed: string, password: string): string =
-  # TODO: type unit optimize, make more safety
   assert password != nil
   if password == "":
     return ""
