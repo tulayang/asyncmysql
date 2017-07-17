@@ -21,17 +21,18 @@ suite "Handshake":
   const MysqlPassword = "123456"
 
   var socket = newAsyncSocket(buffered = false) 
-  var parser = initGreetingPacketParser() 
+  var parser = initPacketParser() 
+  var packet = initGreetingPacket()
   waitFor connect(socket, MysqlHost, MysqlPort)
 
   test "recv handshake initialization packet":
     proc recvHandshakeInit() {.async.} =
       while true:
         var buf = await recv(socket, 3)
-        parse(parser, buf.cstring, buf.len)
+        parse(parser, packet, buf.cstring, buf.len)
         if parser.finished:
           echo "  Buffer length: ", buf.len, " offset: ", parser.offset 
-          echo "  Handshake Initialization Packet: ", parser.packet
+          echo "  Handshake Initialization Packet: ", packet
           check parser.sequenceId == 0
           break
     waitFor1 recvHandshakeInit()  
@@ -45,7 +46,7 @@ suite "Handshake":
            maxPacketSize: 0,
            charset: 33,
            user: MysqlUser,
-           scrambleBuff: parser.packet.scrambleBuff,
+           scrambleBuff: packet.scrambleBuff,
            database: "mysql"), 
         parser.sequenceId + 1, 
         MysqlPassword, 
