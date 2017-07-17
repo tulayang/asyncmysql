@@ -65,12 +65,8 @@ const
   CLIENT_SSL_VERIFY_SERVER_CERT* = 1 shl 30
   CLIENT_REMEMBER_OPTIONS* = 1 shl 31
 
-template cond(exp: untyped): untyped =
-  if not exp: 
-    return
-
 proc toProtocolHex*(x: Natural, len: Positive): string =
-  ## `(0xFAFF, 2)` => `"\xFF\xFA"` 
+  ## For example: `(0xFAFF, 2)` => `"\xFF\xFA"`, `(0xFAFF00, 3)` => `"\x00\xFF\xFA"`. 
   var n = x
   result = newString(len)
   for i in 0..<int(len):
@@ -78,53 +74,61 @@ proc toProtocolHex*(x: Natural, len: Positive): string =
     n = n shr 8
 
 proc toProtocolInt*(str: string): Natural =
-  ## `"\xFF\xFA"` => `0xFAFF`  
+  ## For example: `"\xFF\xFA"` => `0xFAFF`, `"\x00\xFF\xFA"` => `0xFAFF00`.  
   result = 0
   var i = 0
   for c in str:
     inc(result, ord(c) shl (8 * i)) # c.int * pow(16.0, i.float32 * 2).int
     inc(i)
 
-template bufPosChar*(x: pointer, i: int): pointer =
+template cond(exp: untyped): untyped =
+  if not exp: 
+    return
+
+template offsetChar(x: pointer, i: int): pointer =
   cast[pointer](cast[ByteAddress](x) + i * sizeof(char))
 
-template bufPosCharVal*(x: pointer, i: int): char =
-  cast[ptr char](bufPosChar(x, i))[]
+template offsetCharVal(x: pointer, i: int): char =
+  cast[ptr char](offsetChar(x, i))[]
 
 proc joinFixedStr(s: var string, want: var int, buf: pointer, size: int) =
-  # Parses only one packet buf not the whole buf.
+  # Joins `s` incrementally, `s` is a fixed length string. The first `want` is its length.
+  # It is finished if want is `0` when returned, or not finished.
   let n = if size > want: want else: size
   for i in 0..<n:
-    s.add(bufPosCharVal(buf, i)) 
+    s.add(offsetCharVal(buf, i)) 
   dec(want, n)
 
 proc joinNulStr(s: var string, buf: pointer, size: int): tuple[finished: bool, count: int] =
-  # Parses only one packet buf not the whole buf.
+  # Joins `s` incrementally, `s` is a null terminated string. 
   result.finished = false
   for i in 0..<size:
     inc(result.count)
-    if bufPosCharVal(buf, i) == '\0':
+    if offsetCharVal(buf, i) == '\0':
       result.finished = true
       return
     else:
-      s.add(bufPosCharVal(buf, i))
+      s.add(offsetCharVal(buf, i))
 
 type
-  PacketState* = enum
-    packPayloadLength, packSequenceId, packFinish, 
+  PacketState* = enum ## Parse state of the ``PacketParser``.
+    packInitialization,           packPayloadLength,          packSequenceId,             
+    packFinish, 
     packHandshakeProtocolVersion, packHandshakeServerVersion, packHandshakeThreadId, 
-    packHandshakeScrambleBuff1, packHandshakeFiller0, packHandshakeCapabilities1, packHandshakeCharSet, 
-    packHandshakeStatus, packHandshakeCapabilities2, packHandshakeFiller1, packHandshakeFiller2, 
-    packHandshakeScrambleBuff2, packHandshakeFiller3, packHandshakePlugin, 
+    packHandshakeScrambleBuff1,   packHandshakeFiller0,       packHandshakeCapabilities1, 
+    packHandshakeCharSet,         packHandshakeStatus,        packHandshakeCapabilities2, 
+    packHandshakeFiller1,         packHandshakeFiller2,       packHandshakeScrambleBuff2, 
+    packHandshakeFiller3,         packHandshakePlugin, 
     packGenericHeader,
-    packOkAffectedRows, packOkLastInsertId, packOkServerStatus, packOkWarningCount, 
-    packOkStatusInfo, packOkSessionStateInfo,
-    packErrorCode, packErrorSqlStateMarker, packErrorSqlState, packErrorMessage
+    packGenericOkAffectedRows,    packGenericOkLastInsertId,  packGenericOkServerStatus, 
+    packGenericOkWarningCount,    packGenericOkStatusInfo,    packGenericOkSessionStateInfo,
+    packGenericErrorCode,         packGenericErrorSqlState,   packGenericErrorSqlStateMarker,        
+    packGenericErrorMessage
 
-  LenEncodedState* = enum
+  LenEncodedState* = enum ## Parse state for length encoded integer or string.
     encodedFlagVal, encodedIntVal, encodedStrVal
 
-  PacketParser* = object
+  PacketParser* = object ## The packet parser object.
     buf: pointer
     bufLen: int
     bufPos: int
@@ -143,6 +147,7 @@ type
 
   HandshakePacket* = object       
     ## Packet from mysql server when connecting to the server that requires authentication.
+    sequenceId*: int           # 1
     protocolVersion*: int      # 1
     serverVersion*: string     # NullTerminatedString
     threadId*: int             # 4
@@ -156,11 +161,13 @@ type
     scrambleBuff2*: string     # [12]
     scrambleBuff*: string      # 8 + [12]
     plugin*: string            # NullTerminatedString 
+    protocol41*: bool
 
   GenericPacketKind* = enum
     genericOk, genericError, genericEof  
 
   GenericPacket* = object
+    sequenceId*: int           
     case kind*: GenericPacketKind
     of genericOk:
       affectedRows*: int
@@ -178,32 +185,30 @@ type
       warningCountOfEof*: int
       serverStatusOfEof*: int 
 
-proc initHandshakePacket*(): HandshakePacket =
-  result.serverVersion = ""
-  result.scrambleBuff1 = ""
-  result.scrambleBuff2 = ""
-  result.plugin = ""
+proc initHandshakePacket(packet: var HandshakePacket) =
+  packet.serverVersion = ""
+  packet.scrambleBuff1 = ""
+  packet.scrambleBuff2 = ""
+  packet.plugin = ""
 
-proc initGenericPacket*(kind: GenericPacketKind): GenericPacket =
+proc initGenericPacket(packet: var GenericPacket, kind: GenericPacketKind) =
+  packet.kind = kind
   case kind
   of genericOk:
-    result.statusInfo = ""
-    result.sessionStateInfo = ""
+    packet.statusInfo = ""
+    packet.sessionStateInfo = ""
   of genericError:
-    result.sqlStateMarker = ""
-    result.sqlState = ""
-    result.errorMessage = ""
+    packet.sqlStateMarker = ""
+    packet.sqlState = ""
+    packet.errorMessage = ""
   of genericEof:
     discard
 
 proc initPacketParser*(): PacketParser = 
   ## TODO: opmitize buffer
-  result.relayState = packPayloadLength
-  result.state = packPayloadLength
+  result.state = packInitialization
   result.encodedState = encodedFlagVal
   result.want = 3  
-  result.word = ""
-  result.isLast = true
 
 proc finished*(p: PacketParser): bool =
   result = p.state == packFinish
@@ -218,19 +223,11 @@ proc mount(p: var PacketParser, buf: pointer, size: int) =
   p.buf = buf
   p.bufLen = size
   p.bufPos = 0
-  if p.state != packPayloadLength and p.state != packSequenceId:
+  if p.state != packInitialization and p.state != packPayloadLength and p.state != packSequenceId:
     p.realLen = if p.wantPayloadLen <= size: p.wantPayloadLen
                 else: size
 
-proc clear*(p: var PacketParser) = 
-  p.relayState = packPayloadLength
-  p.state = packPayloadLength
-  p.encodedState = encodedFlagVal
-  p.want = 3  
-  p.word = ""
-  p.isLast = true
-
-proc next(p: var PacketParser) = # clear and next
+proc next*(p: var PacketParser) = 
   p.relayState = p.state
   p.relayWant = p.want
   p.state = packPayloadLength
@@ -260,7 +257,7 @@ proc checkIfNext(p: var PacketParser): bool =
 proc parseFixed(p: var PacketParser, field: var int): bool =
   result = true
   let want = p.want
-  joinFixedStr(p.word, p.want, bufPosChar(p.buf, p.bufPos), p.realLen)
+  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.realLen)
   let n = want - p.want
   inc(p.bufPos, n)
   dec(p.realLen, n)
@@ -273,7 +270,7 @@ proc parseFixed(p: var PacketParser, field: var int): bool =
 proc parseFixed(p: var PacketParser, field: var string): bool =
   result = true
   let want = p.want
-  joinFixedStr(field, p.want, bufPosChar(p.buf, p.bufPos), p.realLen)
+  joinFixedStr(field, p.want, offsetChar(p.buf, p.bufPos), p.realLen)
   let n = want - p.want
   inc(p.bufPos, n)
   dec(p.realLen, n)
@@ -283,7 +280,7 @@ proc parseFixed(p: var PacketParser, field: var string): bool =
 
 proc parseNul(p: var PacketParser, field: var string): bool =
   result = true
-  let (finished, count) = joinNulStr(field, bufPosChar(p.buf, p.bufPos), p.realLen)
+  let (finished, count) = joinNulStr(field, offsetChar(p.buf, p.bufPos), p.realLen)
   inc(p.bufPos, count)
   dec(p.realLen, count)
   dec(p.wantPayloadLen, count)
@@ -363,7 +360,7 @@ proc parseLenEncoded(p: var PacketParser, field: var string): bool =
 proc parseOnPayloadLen(p: var PacketParser): bool =
   result = true
   let w = p.want
-  joinFixedStr(p.word, p.want, bufPosChar(p.buf, p.bufPos), p.bufLen - p.bufPos)
+  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.bufLen - p.bufPos)
   inc(p.bufPos, w - p.want)
   if p.want > 0: 
     return false
@@ -380,7 +377,7 @@ proc parseOnPayloadLen(p: var PacketParser): bool =
 proc parseOnSequenceId(p: var PacketParser, nextWant: int, nextState: PacketState): bool =
   result = true
   let w = p.want
-  joinFixedStr(p.word, p.want, bufPosChar(p.buf, p.bufLen - p.bufPos), p.bufLen - p.bufPos)
+  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.bufLen - p.bufPos)
   inc(p.bufPos, w - p.want)
   if p.want > 0:
     return false
@@ -389,18 +386,22 @@ proc parseOnSequenceId(p: var PacketParser, nextWant: int, nextState: PacketStat
   inc(p.packetPos)
   p.realLen = if p.bufLen - p.bufPos > p.wantPayloadLen: p.wantPayloadLen
               else: p.bufLen - p.bufPos
-  if p.relayState == packPayloadLength:
+  if p.relayState == packInitialization:
     p.want = nextWant
     p.state = nextState
   else:
     p.state = p.relayState
     p.want = p.relayWant
-    p.relayState = packPayloadLength
+    p.relayState = packInitialization
 
 proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size: int) = 
   mount(p, buf, size)
   while true:
     case p.state
+    of packInitialization:
+      initHandshakePacket(packet)
+      next(p)
+      p.state = packPayloadLength
     of packPayloadLength:
       cond parseOnPayloadLen(p)
     of packSequenceId:
@@ -434,7 +435,8 @@ proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size
       p.want = 2
     of packHandshakeStatus:
       cond parseFixed(p, packet.serverStatus)
-      if (packet.capabilities1 and CLIENT_PROTOCOL_41) > 0:
+      packet.protocol41 = (packet.capabilities1 and CLIENT_PROTOCOL_41) > 0
+      if packet.protocol41:
         p.state = packHandshakeCapabilities2
         p.want = 2
       else:
@@ -473,6 +475,7 @@ proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size
       cond parseNul(p, packet.plugin)
       p.state = packFinish
     of packFinish:
+      packet.sequenceId = p.sequenceId
       return
     else:
       raise newException(ValueError, "imposible state")
@@ -481,10 +484,13 @@ proc parse*(parser: var PacketParser, packet: var HandshakePacket, buf: string) 
   ## Parse the ``buf`` data.
   parse(parser, packet, buf.cstring, buf.len)
 
-proc parse*(p: var PacketParser, packet: var GenericPacket, handPacket: HandshakePacket, buf: pointer, size: int) = 
+proc parse*(p: var PacketParser, packet: var GenericPacket, handshakePacket: HandshakePacket, buf: pointer, size: int) = 
   mount(p, buf, size)
   while true:
     case p.state
+    of packInitialization:
+      next(p)
+      p.state = packPayloadLength
     of packPayloadLength:
       cond parseOnPayloadLen(p)
     of packSequenceId:
@@ -494,76 +500,83 @@ proc parse*(p: var PacketParser, packet: var GenericPacket, handPacket: Handshak
       cond parseFixed(p, header)
       case header
       of 0x00:
-        packet = initGenericPacket(genericOk)
-        p.state = packOkAffectedRows
+        initGenericPacket(packet, genericOk)
+        p.state = packGenericOkAffectedRows
         p.want = 1
         p.encodedState = encodedFlagVal
       of 0xFE:
-        packet = initGenericPacket(genericError)
-        if (handPacket.capabilities and CLIENT_PROTOCOL_41) > 0:
+        initGenericPacket(packet, genericError)
+        if (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0:
           discard # TODO
         else:
           p.state = packFinish
       of 0xFF:
-        packet = initGenericPacket(genericEof)
-        p.state = packErrorCode # TODO
+        initGenericPacket(packet, genericEof)
+        p.state = packGenericErrorCode # TODO
         p.want = 2
       else:
         raise newException(ValueError, "invalid header")
-    of packOkAffectedRows:
+    of packGenericOkAffectedRows:
       cond parseLenEncoded(p, packet.affectedRows)
-      p.state = packOkLastInsertId
-    of packOkLastInsertId:
+      p.state = packGenericOkLastInsertId
+    of packGenericOkLastInsertId:
       cond parseLenEncoded(p, packet.lastInsertId)
-      if (handPacket.capabilities and CLIENT_PROTOCOL_41) > 0 or 
-         (handPacket.capabilities and CLIENT_PROTOCOL_41) > 0:
-        p.state = packOkServerStatus
+      if (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0 or 
+         (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0:
+        p.state = packGenericOkServerStatus
         p.want = 2
       else:
-        p.state = packOkStatusInfo
-        if (handPacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+        p.state = packGenericOkStatusInfo
+        if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) == 0:
           p.want = p.wantPayloadLen
-    of packOkServerStatus:
+    of packGenericOkServerStatus:
       cond parseFixed(p, packet.serverStatus)
-      if (handPacket.capabilities and CLIENT_PROTOCOL_41) > 0:
-        p.state = packOkWarningCount
+      if (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0:
+        p.state = packGenericOkWarningCount
         p.want = 2
       else:
-        p.state = packOkStatusInfo
-        if (handPacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+        p.state = packGenericOkStatusInfo
+        if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) == 0:
           p.want = p.wantPayloadLen
-    of packOkWarningCount:
+    of packGenericOkWarningCount:
       cond parseFixed(p, packet.warningCount)
-      p.state = packOkStatusInfo
-      if (handPacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+      p.state = packGenericOkStatusInfo
+      if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) == 0:
         p.want = p.wantPayloadLen
-    of packOkStatusInfo:
-      if (handPacket.capabilities and CLIENT_SESSION_TRACK) > 0:
+    of packGenericOkStatusInfo:
+      if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
         cond parseLenEncoded(p, packet.sessionStateInfo)
-        p.state = packOkSessionStateInfo
+        p.state = packGenericOkSessionStateInfo
         p.want = p.wantPayloadLen
       else:
         cond parseFixed(p, packet.statusInfo)
         p.state = packFinish
-    of packOkSessionStateInfo:
+    of packGenericOkSessionStateInfo:
       cond parseLenEncoded(p, packet.sessionStateInfo)
       p.state = packFinish
     of packFinish:
+      packet.sequenceId = p.sequenceId
       return
     else:
       raise newException(ValueError, "imposible state")
 
+proc parse*(parser: var PacketParser, packet: var GenericPacket, handshakePacket: HandshakePacket, buf: string) =
+  ## Parse the ``buf`` data.
+  parse(parser, packet, handshakePacket, buf.cstring, buf.len)
+
 type
-  ClientAuthenticationPacket* = tuple 
+  ClientAuthenticationPacket* = object 
     ## Packet for login request.
-    capabilities: int         # 4
-    maxPacketSize: int        # 4
-    charset: int              # [1]
-    # filler: string          # [23]
-    user: string              # NullTerminatedString
-    # scrambleLen             # 1
-    scrambleBuff: string      # 20
-    database: string          # NullTerminatedString
+    sequenceId*: int           # 1
+    capabilities*: int         # 4
+    maxPacketSize*: int        # 4
+    charset*: int              # [1]
+    # filler: string           # [23]
+    user*: string              # NullTerminatedString
+    # scrambleLen              # 1
+    scrambleBuff*: string      # 20
+    database*: string          # NullTerminatedString
+    protocol41*: bool
 
 proc parseHex(c: char): int =
   case c
@@ -635,15 +648,14 @@ proc scramble323(seed: string, password: string): string =
   for i in 0..<seed.len:
     result[i] = chr(ord(result[i]) xor b.int)
 
-proc toPacketHex*(packet: ClientAuthenticationPacket, sequenceId: int,
-                  password: string, protocol41: bool): string =
+proc toPacketHex*(packet: ClientAuthenticationPacket, password: string): string = 
   var payloadLen: int
-  if protocol41:
+  if packet.protocol41:
     payloadLen = 4 + 4 + 1 + 23 + packet.user.len + 1 + 1 +
                     20 + packet.database.len + 1
     result = newStringOfCap(4 + payloadLen)
     add(result, toProtocolHex(payloadLen, 3))
-    add(result, toProtocolHex(sequenceId, 1))
+    add(result, toProtocolHex(packet.sequenceId, 1))
     add(result, toProtocolHex(packet.capabilities, 4))
     add(result, toProtocolHex(packet.maxPacketSize, 4))
     add(result, toProtocolHex(packet.charset, 1))
@@ -659,11 +671,9 @@ proc toPacketHex*(packet: ClientAuthenticationPacket, sequenceId: int,
                     8 + 1 + packet.database.len + 1
     result = newStringOfCap(4 + payloadLen)                
     add(result, toProtocolHex(payloadLen, 3))
-    add(result, toProtocolHex(sequenceId, 1))
-
+    add(result, toProtocolHex(packet.sequenceId, 1))
     add(result, toProtocolHex(packet.capabilities, 2))
     add(result, toProtocolHex(packet.maxPacketSize, 3))
-
     add(result, packet.user)
     add(result, '\0')
     add(result, scramble323(packet.scrambleBuff[0..7], password))

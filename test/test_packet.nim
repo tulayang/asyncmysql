@@ -21,57 +21,51 @@ suite "Handshake":
   const MysqlPassword = "123456"
 
   var socket = newAsyncSocket(buffered = false) 
-  var parser = initPacketParser() 
-  var packet = initHandshakePacket()
+  var handshakePacket: HandshakePacket
   waitFor connect(socket, MysqlHost, MysqlPort)
 
   test "recv handshake initialization packet":
     proc recvHandshakeInit() {.async.} =
+      var parser = initPacketParser() 
       while true:
         var buf = await recv(socket, 3)
-        parse(parser, packet, buf.cstring, buf.len)
+        parse(parser, handshakePacket, buf)
         if parser.finished:
           echo "  Buffer length: ", buf.len, " offset: ", parser.offset 
-          echo "  Handshake Initialization Packet: ", packet
-          check parser.sequenceId == 0
+          echo "  Handshake Initialization Packet: ", handshakePacket
+          check handshakePacket.sequenceId == 0
           break
     waitFor1 recvHandshakeInit()  
 
   test "send client authentication packet":
     proc sendAuth() {.async.} =
+      var parser = initPacketParser() 
+      var packet: GenericPacket
       await send(
         socket, 
         toPacketHex(
-          (capabilities: 521167,
-           maxPacketSize: 0,
-           charset: 33,
-           user: MysqlUser,
-           scrambleBuff: packet.scrambleBuff,
-           database: "mysql"), 
-        parser.sequenceId + 1, 
-        MysqlPassword, 
-        true) )
-      clear(parser)
+          ClientAuthenticationPacket(
+            sequenceId: handshakePacket.sequenceId + 1, 
+            capabilities: 521167,
+            maxPacketSize: 0,
+            charset: 33,
+            user: MysqlUser,
+            scrambleBuff: handshakePacket.scrambleBuff,
+            database: "mysql",
+            protocol41: handshakePacket.protocol41), 
+        MysqlPassword))
       while true:
-        var buf = await recv(socket, 1024)
-        var gPacket: GenericPacket
+        var buf = await recv(socket, 32)
         write(stdout, "  OK Packet: ")
+        check toProtocolInt(buf[3] & "") == parser.sequenceId + 2
+        check toProtocolInt(buf[4] & "") == 0
         for c in buf:
           write(stdout, toHex(ord(c), 2), ' ')
         write(stdout, '\L')
-        parse(parser, gPacket, packet, buf.cstring, buf.len)
+        parse(parser, packet, handshakePacket, buf)
         if parser.finished:
           echo "  Buffer length: ", buf.len, " offset: ", parser.offset 
-          echo "  Handshake Initialization Packet: ", gPacket
-          #check parser.sequenceId == 0
+          echo "  Handshake Initialization Packet: ", packet
+          check parser.sequenceId == 2
           break
-      # while true:
-      #   var buf = await recv(socket, 1024)
-      #   check toProtocolInt(buf[3] & "") == parser.sequenceId + 2
-      #   check toProtocolInt(buf[4] & "") == 0
-      #   write(stdout, "  OK Packet: ")
-      #   for c in buf:
-      #     write(stdout, toHex(ord(c), 2), ' ')
-      #   write(stdout, '\L')
-      #   break
     waitFor1 sendAuth()  
