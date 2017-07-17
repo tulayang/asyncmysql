@@ -22,7 +22,7 @@ suite "Handshake":
 
   var socket = newAsyncSocket(buffered = false) 
   var parser = initPacketParser() 
-  var packet = initGreetingPacket()
+  var packet = initHandshakePacket()
   waitFor connect(socket, MysqlHost, MysqlPort)
 
   test "recv handshake initialization packet":
@@ -51,13 +51,27 @@ suite "Handshake":
         parser.sequenceId + 1, 
         MysqlPassword, 
         true) )
+      clear(parser)
       while true:
         var buf = await recv(socket, 1024)
-        check toProtocolInt(buf[3] & "") == parser.sequenceId + 2
-        check toProtocolInt(buf[4] & "") == 0
+        var gPacket: GenericPacket
         write(stdout, "  OK Packet: ")
         for c in buf:
           write(stdout, toHex(ord(c), 2), ' ')
         write(stdout, '\L')
-        break
+        parse(parser, gPacket, packet, buf.cstring, buf.len)
+        if parser.finished:
+          echo "  Buffer length: ", buf.len, " offset: ", parser.offset 
+          echo "  Handshake Initialization Packet: ", gPacket
+          #check parser.sequenceId == 0
+          break
+      # while true:
+      #   var buf = await recv(socket, 1024)
+      #   check toProtocolInt(buf[3] & "") == parser.sequenceId + 2
+      #   check toProtocolInt(buf[4] & "") == 0
+      #   write(stdout, "  OK Packet: ")
+      #   for c in buf:
+      #     write(stdout, toHex(ord(c), 2), ' ')
+      #   write(stdout, '\L')
+      #   break
     waitFor1 sendAuth()  

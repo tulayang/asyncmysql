@@ -85,17 +85,17 @@ proc toProtocolInt*(str: string): Natural =
     inc(result, ord(c) shl (8 * i)) # c.int * pow(16.0, i.float32 * 2).int
     inc(i)
 
-template offsetChar*(x: pointer, i: int): pointer =
+template bufPosChar*(x: pointer, i: int): pointer =
   cast[pointer](cast[ByteAddress](x) + i * sizeof(char))
 
-template offsetCharVal*(x: pointer, i: int): char =
-  cast[ptr char](offsetChar(x, i))[]
+template bufPosCharVal*(x: pointer, i: int): char =
+  cast[ptr char](bufPosChar(x, i))[]
 
 proc joinFixedStr(s: var string, want: var int, buf: pointer, size: int) =
   # Parses only one packet buf not the whole buf.
   let n = if size > want: want else: size
   for i in 0..<n:
-    s.add(offsetCharVal(buf, i)) 
+    s.add(bufPosCharVal(buf, i)) 
   dec(want, n)
 
 proc joinNulStr(s: var string, buf: pointer, size: int): tuple[finished: bool, count: int] =
@@ -103,33 +103,35 @@ proc joinNulStr(s: var string, buf: pointer, size: int): tuple[finished: bool, c
   result.finished = false
   for i in 0..<size:
     inc(result.count)
-    if offsetCharVal(buf, i) == '\0':
+    if bufPosCharVal(buf, i) == '\0':
       result.finished = true
       return
     else:
-      s.add(offsetCharVal(buf, i))
+      s.add(bufPosCharVal(buf, i))
 
 type
   PacketState* = enum
-    packInitiation, packPayloadLength, packSequenceId, packFinish, 
-
+    packPayloadLength, packSequenceId, packFinish, 
     packHandshakeProtocolVersion, packHandshakeServerVersion, packHandshakeThreadId, 
     packHandshakeScrambleBuff1, packHandshakeFiller0, packHandshakeCapabilities1, packHandshakeCharSet, 
     packHandshakeStatus, packHandshakeCapabilities2, packHandshakeFiller1, packHandshakeFiller2, 
     packHandshakeScrambleBuff2, packHandshakeFiller3, packHandshakePlugin, 
-
+    packGenericHeader,
     packOkAffectedRows, packOkLastInsertId, packOkServerStatus, packOkWarningCount, 
-    packOkInfo, packOkSessionStateInfo,
+    packOkStatusInfo, packOkSessionStateInfo,
     packErrorCode, packErrorSqlStateMarker, packErrorSqlState, packErrorMessage
+
+  LenEncodedState* = enum
+    encodedFlagVal, encodedIntVal, encodedStrVal
 
   PacketParser* = object
     buf: pointer
     bufLen: int
+    bufPos: int
+    realLen: int
+    packetPos: int
     word: string
     want: int
-    offset: int
-    packetOffset: int
-    realLen: int
     payloadLen: int
     sequenceId: int
     wantPayloadLen: int
@@ -137,33 +139,68 @@ type
     isLast: bool
     state: PacketState
     relayState: PacketState
+    encodedState: LenEncodedState
 
-  GreetingPacket* = tuple       
+  HandshakePacket* = object       
     ## Packet from mysql server when connecting to the server that requires authentication.
-    protocolVersion: int      # 1
-    serverVersion: string     # NullTerminatedString
-    threadId: int             # 4
-    scrambleBuff1: string     # 8
-    capabilities: int         # (4)
-    capabilities1: int        # 2
-    charset: int              # 1
-    serverStatus: int         # 2
-    capabilities2: int        # [2]
-    scrambleLen: int          # [1]
-    scrambleBuff2: string     # [12]
-    scrambleBuff: string      # 8 + [12]
-    plugin: string            # NullTerminatedString      
+    protocolVersion*: int      # 1
+    serverVersion*: string     # NullTerminatedString
+    threadId*: int             # 4
+    scrambleBuff1*: string     # 8
+    capabilities*: int         # (4)
+    capabilities1*: int        # 2
+    charset*: int              # 1
+    serverStatus*: int         # 2
+    capabilities2*: int        # [2]
+    scrambleLen*: int          # [1]
+    scrambleBuff2*: string     # [12]
+    scrambleBuff*: string      # 8 + [12]
+    plugin*: string            # NullTerminatedString 
 
-proc initGreetingPacket*(): GreetingPacket =
+  GenericPacketKind* = enum
+    genericOk, genericError, genericEof  
+
+  GenericPacket* = object
+    case kind*: GenericPacketKind
+    of genericOk:
+      affectedRows*: int
+      lastInsertId*: int
+      serverStatus*: int
+      warningCount*: int
+      statusInfo*: string
+      sessionStateInfo*: string
+    of genericError:
+      errorCode*: int  
+      sqlStateMarker*: string
+      sqlState*: string
+      errorMessage*: string
+    of genericEof:
+      warningCountOfEof*: int
+      serverStatusOfEof*: int 
+
+proc initHandshakePacket*(): HandshakePacket =
   result.serverVersion = ""
   result.scrambleBuff1 = ""
   result.scrambleBuff2 = ""
   result.plugin = ""
 
+proc initGenericPacket*(kind: GenericPacketKind): GenericPacket =
+  case kind
+  of genericOk:
+    result.statusInfo = ""
+    result.sessionStateInfo = ""
+  of genericError:
+    result.sqlStateMarker = ""
+    result.sqlState = ""
+    result.errorMessage = ""
+  of genericEof:
+    discard
+
 proc initPacketParser*(): PacketParser = 
   ## TODO: opmitize buffer
   result.relayState = packPayloadLength
   result.state = packPayloadLength
+  result.encodedState = encodedFlagVal
   result.want = 3  
   result.word = ""
   result.isLast = true
@@ -175,29 +212,37 @@ proc sequenceId*(parser: PacketParser): int =
   result = parser.sequenceId
 
 proc offset*(parser: PacketParser): int = 
-  result = parser.offset
+  result = parser.bufPos
 
 proc mount(p: var PacketParser, buf: pointer, size: int) = 
   p.buf = buf
   p.bufLen = size
-  p.offset = 0
+  p.bufPos = 0
   if p.state != packPayloadLength and p.state != packSequenceId:
     p.realLen = if p.wantPayloadLen <= size: p.wantPayloadLen
                 else: size
+
+proc clear*(p: var PacketParser) = 
+  p.relayState = packPayloadLength
+  p.state = packPayloadLength
+  p.encodedState = encodedFlagVal
+  p.want = 3  
+  p.word = ""
+  p.isLast = true
 
 proc next(p: var PacketParser) = # clear and next
   p.relayState = p.state
   p.relayWant = p.want
   p.state = packPayloadLength
-  p.realLen = 0
   p.want = 3  
   p.word = ""
   p.isLast = true
-
+  p.realLen = 0
+  
 proc checkIfNext(p: var PacketParser): bool =
   result = true
   assert p.realLen == 0
-  if p.bufLen > p.offset:
+  if p.bufLen > p.bufPos:
     assert p.wantPayloadLen == 0
     if p.isLast:
       raise newException(ValueError, "invalid packet")
@@ -215,9 +260,9 @@ proc checkIfNext(p: var PacketParser): bool =
 proc parseFixed(p: var PacketParser, field: var int): bool =
   result = true
   let want = p.want
-  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.offset), p.realLen)
+  joinFixedStr(p.word, p.want, bufPosChar(p.buf, p.bufPos), p.realLen)
   let n = want - p.want
-  inc(p.offset, n)
+  inc(p.bufPos, n)
   dec(p.realLen, n)
   dec(p.wantPayloadLen, n)
   if p.want > 0:
@@ -228,9 +273,9 @@ proc parseFixed(p: var PacketParser, field: var int): bool =
 proc parseFixed(p: var PacketParser, field: var string): bool =
   result = true
   let want = p.want
-  joinFixedStr(field, p.want, offsetChar(p.buf, p.offset), p.realLen)
+  joinFixedStr(field, p.want, bufPosChar(p.buf, p.bufPos), p.realLen)
   let n = want - p.want
-  inc(p.offset, n)
+  inc(p.bufPos, n)
   dec(p.realLen, n)
   dec(p.wantPayloadLen, n)
   if p.want > 0:
@@ -238,8 +283,8 @@ proc parseFixed(p: var PacketParser, field: var string): bool =
 
 proc parseNul(p: var PacketParser, field: var string): bool =
   result = true
-  let (finished, count) = joinNulStr(field, offsetChar(p.buf, p.offset), p.realLen)
-  inc(p.offset, count)
+  let (finished, count) = joinNulStr(field, bufPosChar(p.buf, p.bufPos), p.realLen)
+  inc(p.bufPos, count)
   dec(p.realLen, count)
   dec(p.wantPayloadLen, count)
   if not finished:
@@ -248,23 +293,78 @@ proc parseNul(p: var PacketParser, field: var string): bool =
 proc parseFiller(p: var PacketParser): bool =
   result = true
   if p.want > p.realLen:
-    inc(p.offset, p.realLen)
+    inc(p.bufPos, p.realLen)
     dec(p.wantPayloadLen, p.realLen)
     dec(p.want, p.realLen)
     dec(p.realLen, p.realLen)
     return checkIfNext(p)
   else:  
     let n = p.want
-    inc(p.offset, n)
+    inc(p.bufPos, n)
     dec(p.realLen, n)
     dec(p.wantPayloadLen, n)
     dec(p.want, n)
 
+proc parseLenEncoded(p: var PacketParser, field: var int): bool =
+  case p.encodedState
+  of encodedFlagVal:
+    var value: int
+    if not parseFixed(p, value):
+      return false
+    assert value >= 0
+    if value < 251:
+      field = value
+      return true
+    elif value == 0xFC:
+      p.want = 2
+    elif value == 0xFD:
+      p.want = 3
+    elif value == 0xFE:
+      p.want = 8
+    else:
+      raise newException(ValueError, "invalid encoded flag")  
+    p.encodedState = encodedIntVal
+    return false
+  of encodedIntVal:
+    return parseFixed(p, field)
+  else:
+    raise newException(ValueError, "imposible state")
+
+proc parseLenEncoded(p: var PacketParser, field: var string): bool =
+  case p.encodedState
+  of encodedFlagVal:
+    var value: int
+    if not parseFixed(p, value):
+      return false
+    assert value >= 0
+    if value < 251:
+      p.encodedState = encodedStrVal
+      return false
+    elif value == 0xFC:
+      p.want = 2
+    elif value == 0xFD:
+      p.want = 3
+    elif value == 0xFE:
+      p.want = 8
+    else:
+      raise newException(ValueError, "invalid encoded flag")  
+    p.encodedState = encodedIntVal
+    return false
+  of encodedIntVal:
+    var value: int
+    if not parseFixed(p, value):
+      return false
+    p.want = value
+    p.encodedState = encodedStrVal
+    return false
+  of encodedStrVal:
+    return parseFixed(p, field)
+
 proc parseOnPayloadLen(p: var PacketParser): bool =
   result = true
   let w = p.want
-  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.offset), p.bufLen - p.offset)
-  inc(p.offset, w - p.want)
+  joinFixedStr(p.word, p.want, bufPosChar(p.buf, p.bufPos), p.bufLen - p.bufPos)
+  inc(p.bufPos, w - p.want)
   if p.want > 0: 
     return false
   p.payloadLen = toProtocolInt(p.word)
@@ -280,15 +380,15 @@ proc parseOnPayloadLen(p: var PacketParser): bool =
 proc parseOnSequenceId(p: var PacketParser, nextWant: int, nextState: PacketState): bool =
   result = true
   let w = p.want
-  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufLen - p.offset), p.bufLen - p.offset)
-  inc(p.offset, w - p.want)
+  joinFixedStr(p.word, p.want, bufPosChar(p.buf, p.bufLen - p.bufPos), p.bufLen - p.bufPos)
+  inc(p.bufPos, w - p.want)
   if p.want > 0:
     return false
   p.sequenceId = toProtocolInt(p.word)
   p.word = ""
-  inc(p.packetOffset)
-  p.realLen = if p.bufLen - p.offset > p.wantPayloadLen: p.wantPayloadLen
-              else: p.bufLen - p.offset
+  inc(p.packetPos)
+  p.realLen = if p.bufLen - p.bufPos > p.wantPayloadLen: p.wantPayloadLen
+              else: p.bufLen - p.bufPos
   if p.relayState == packPayloadLength:
     p.want = nextWant
     p.state = nextState
@@ -297,7 +397,7 @@ proc parseOnSequenceId(p: var PacketParser, nextWant: int, nextState: PacketStat
     p.want = p.relayWant
     p.relayState = packPayloadLength
 
-proc parse*(p: var PacketParser, packet: var GreetingPacket, buf: pointer, size: int) = 
+proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size: int) = 
   mount(p, buf, size)
   while true:
     case p.state
@@ -377,9 +477,81 @@ proc parse*(p: var PacketParser, packet: var GreetingPacket, buf: pointer, size:
     else:
       raise newException(ValueError, "imposible state")
 
-proc parse*(parser: var PacketParser, packet: var GreetingPacket, buf: string) =
+proc parse*(parser: var PacketParser, packet: var HandshakePacket, buf: string) =
   ## Parse the ``buf`` data.
   parse(parser, packet, buf.cstring, buf.len)
+
+proc parse*(p: var PacketParser, packet: var GenericPacket, handPacket: HandshakePacket, buf: pointer, size: int) = 
+  mount(p, buf, size)
+  while true:
+    case p.state
+    of packPayloadLength:
+      cond parseOnPayloadLen(p)
+    of packSequenceId:
+      cond parseOnSequenceId(p, 1, packGenericHeader)
+    of packGenericHeader:
+      var header: int
+      cond parseFixed(p, header)
+      case header
+      of 0x00:
+        packet = initGenericPacket(genericOk)
+        p.state = packOkAffectedRows
+        p.want = 1
+        p.encodedState = encodedFlagVal
+      of 0xFE:
+        packet = initGenericPacket(genericError)
+        if (handPacket.capabilities and CLIENT_PROTOCOL_41) > 0:
+          discard # TODO
+        else:
+          p.state = packFinish
+      of 0xFF:
+        packet = initGenericPacket(genericEof)
+        p.state = packErrorCode # TODO
+        p.want = 2
+      else:
+        raise newException(ValueError, "invalid header")
+    of packOkAffectedRows:
+      cond parseLenEncoded(p, packet.affectedRows)
+      p.state = packOkLastInsertId
+    of packOkLastInsertId:
+      cond parseLenEncoded(p, packet.lastInsertId)
+      if (handPacket.capabilities and CLIENT_PROTOCOL_41) > 0 or 
+         (handPacket.capabilities and CLIENT_PROTOCOL_41) > 0:
+        p.state = packOkServerStatus
+        p.want = 2
+      else:
+        p.state = packOkStatusInfo
+        if (handPacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+          p.want = p.wantPayloadLen
+    of packOkServerStatus:
+      cond parseFixed(p, packet.serverStatus)
+      if (handPacket.capabilities and CLIENT_PROTOCOL_41) > 0:
+        p.state = packOkWarningCount
+        p.want = 2
+      else:
+        p.state = packOkStatusInfo
+        if (handPacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+          p.want = p.wantPayloadLen
+    of packOkWarningCount:
+      cond parseFixed(p, packet.warningCount)
+      p.state = packOkStatusInfo
+      if (handPacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+        p.want = p.wantPayloadLen
+    of packOkStatusInfo:
+      if (handPacket.capabilities and CLIENT_SESSION_TRACK) > 0:
+        cond parseLenEncoded(p, packet.sessionStateInfo)
+        p.state = packOkSessionStateInfo
+        p.want = p.wantPayloadLen
+      else:
+        cond parseFixed(p, packet.statusInfo)
+        p.state = packFinish
+    of packOkSessionStateInfo:
+      cond parseLenEncoded(p, packet.sessionStateInfo)
+      p.state = packFinish
+    of packFinish:
+      return
+    else:
+      raise newException(ValueError, "imposible state")
 
 type
   ClientAuthenticationPacket* = tuple 
@@ -499,236 +671,3 @@ proc toPacketHex*(packet: ClientAuthenticationPacket, sequenceId: int,
     add(result, packet.database)
     add(result, '\0')
 
-# type 
-#   OkPacket* = tuple
-#     fieldCount: int
-#     affectedRows: int
-#     lastInsertId: int
-#     serverStatus: int
-#     warningCount: int
-#     info: string
-
-#   ErrorPacket* = tuple
-#     fieldCount: int
-#     errorCode: int  
-#     sqlStateMarker: string
-#     sqlState: string
-#     errorMessage: string
-
-#   EofPacket* = tuple
-#     fieldCount: int
-#     warningCount: int
-#     serverStatus: int
-
-#   GenericPacketState* = enum
-#     genericPacket, genericExtraPacket, genericPayload, genericFinished,
-#     genericOkAffectedRows, genericOkLastInsertId, genericOkServerStatus, genericOkWarningCount,
-#     genericOkInfo, genericOkSessionStateInfo,
-#     genericErrorCode, genericErrorSqlStateMarker, genericErrorSqlState, genericErrorMessage
-
-#   GenericPacketParser*[T: OkPacket | ErrorPacket | EofPacket] = object
-#     hparser: PacketParser
-#     packet*: T
-#     word: string
-#     want: int
-#     relayWant: int
-#     offset: int
-#     wantPayloadLen: int
-#     state: GreetingPacketState
-#     relayState: GreetingPacketState
-
-# proc parse*[T: OkPacket | ErrorPacket | EofPacket](parser: var GenericPacketParser[T], buf: pointer, size: int, capabilities: int) =
-#   var pos = 0 
-#   var realLen: int
-
-#   template hparser: untyped= parser.hparser
-#   template packet: untyped = parser.packet
-
-#   template next() =
-#     clear(parser.hparser)
-#     parser.relayState = parser.state
-#     parser.relayWant = parser.want
-#     parser.state = genericExtraPacket
-#     parser.want = 3  
-#     continue
-
-#   template checkIfNext() =
-#     assert realLen == 0
-#     if size > pos:
-#       assert parser.wantPayloadLen == 0
-#       if hparser.isLast:
-#         raise newException(ValueError, "invalid packet")
-#       else:
-#         next
-#     else: 
-#       if parser.wantPayloadLen > 0:
-#         parser.offset = pos
-#         return
-#       else: # == 0
-#         if hparser.isLast:
-#           raise newException(ValueError, "invalid packet")
-#         else:
-#           next
-
-#   template parseFixed(field: var int) =
-#     let want = parser.want
-#     joinFixedStr(parser.word, parser.want, offsetChar(buf, pos), realLen)
-#     let n = want - parser.want
-#     inc(pos, n)
-#     dec(realLen, n)
-#     dec(parser.wantPayloadLen, n)
-#     if parser.want > 0:
-#       checkIfNext
-#     else: 
-#       field = toProtocolInt(parser.word)
-#       parser.word = ""
-
-#   template parseFixed(field: var string) =
-#     let want = parser.want
-#     joinFixedStr(field, parser.want, offsetChar(buf, pos), realLen)
-#     let n = want - parser.want
-#     inc(pos, n)
-#     dec(realLen, n)
-#     dec(parser.wantPayloadLen, n)
-#     if parser.want > 0:
-#       checkIfNext
-
-#   template parseNul(field: var string) {.dirty.} =
-#     let (finished, count) = joinNulStr(field, offsetChar(buf, pos), realLen)
-#     inc(pos, count)
-#     dec(realLen, count)
-#     dec(parser.wantPayloadLen, count)
-#     if not finished:
-#       checkIfNext
-
-#   template parseFiller() {.dirty.} =
-#     if parser.want > realLen:
-#       inc(pos, realLen)
-#       dec(parser.wantPayloadLen, realLen)
-#       dec(parser.want, realLen)
-#       dec(realLen, realLen)
-#       checkIfNext
-#     else:  
-#       let n = parser.want
-#       inc(pos, n)
-#       dec(realLen, n)
-#       dec(parser.wantPayloadLen, n)
-#       dec(parser.want, n)
-
-#   if parser.state != genericPacket and parser.state != genericExtraPacket:
-#     realLen = if parser.wantPayloadLen <= size: parser.wantPayloadLen
-#                else: size
-
-#   while true:
-#     case parser.state
-#     of genericPacket:
-#       parse(hparser, parser.word, parser.want, buf, size)
-#       inc(pos, hparser.offset)
-#       if not hparser.finished:
-#         assert pos == size
-#         parser.offset = pos
-#         return 
-#       parser.wantPayloadLen = hparser.payloadLen
-#       realLen = if size - pos > parser.wantPayloadLen: parser.wantPayloadLen
-#                  else: size - pos 
-#       parser.state = genericPayload
-#       parser.want = 1  
-#     of genericExtraPacket:
-#       assert parser.wantPayloadLen == 0
-#       parse(hparser, parser.word, parser.want, offsetChar(buf, pos), size - pos)
-#       inc(pos, hparser.offset)
-#       if not hparser.finished:
-#         assert pos == size
-#         parser.offset = pos
-#         return 
-#       parser.wantPayloadLen = hparser.payloadLen
-#       realLen = if size - pos > parser.wantPayloadLen: parser.wantPayloadLen
-#                  else: size - pos
-#       parser.state = parser.relayState
-#       parser.want = parser.relayWant
-#       parser.relayState = genericPacket  
-#     of genericPayload:
-#       parseFixed(packet.fieldCount)
-#       case packet.fieldCount
-#       of 0x00:
-#         parser.want = 1
-#         var value: int
-#         parseFixed(value)
-#         assert value >= 0
-#         # TODO 使用状态机，让这些 parse 成为增量的
-#         if value < 251: 
-#           packet.affectedRows = value
-#         elif value == 0xFC:
-#           parser.want = 2
-#           parseFixed(value)
-#           packet.affectedRows = value
-#         elif value == 0xFD:
-#           parser.want = 3
-#           parseFixed(value)
-#           packet.affectedRows = value
-#         elif value == 0xFE:
-#           parser.want = 8
-#           parseFixed(value)
-#           packet.affectedRows = value
-#         else:
-#           raise newException(ValueError, "invalid fieldCount") # TODO 
-#         parser.want = 1
-#         parser.state = genericOkLastInsertId
-#       of 0xFE:
-#         discard
-#       of 0xFF:
-#         discard
-#       else:
-#         raise newException(ValueError, "invalid fieldCount") # TODO 
-#     of genericOkLastInsertId:
-#       var value: int
-#       parseFixed(value)
-#       assert value >= 0
-#       # TODO 使用状态机，让这些 parse 成为增量的
-#       if value < 251: 
-#         packet.lastInsertId = value
-#       elif value == 0xFC:
-#         parser.want = 2
-#         parseFixed(value)
-#         packet.lastInsertId = value
-#       elif value == 0xFD:
-#         parser.want = 3
-#         parseFixed(value)
-#         packet.lastInsertId = value
-#       elif value == 0xFE:
-#         parser.want = 8
-#         parseFixed(value)
-#         packet.lastInsertId = value
-#       else:
-#         raise newException(ValueError, "invalid lastInsertId") # TODO 
-#       if (capabilities and CLIENT_PROTOCOL_41) > 0 or (capabilities and CLIENT_TRANSACTIONS) > 0:
-#         parser.want = 2
-#         parser.state = genericOkServerStatus
-#       else:
-#         if (capabilities and CLIENT_SESSION_TRACK) > 0:
-#           parser.state = genericOkSessionStateInfo
-#         else:
-#           parser.state = genericOkInfo
-#     of genericOkServerStatus:
-#       parseFixed(packet.serverStatus)
-#       if (capabilities and CLIENT_PROTOCOL_41) > 0:
-#         parser.want = 2
-#         parser.state = genericOkWarningCount
-#       else:
-#         if (capabilities and CLIENT_SESSION_TRACK) > 0:
-#           parser.state = genericOkSessionStateInfo
-#         else:
-#           parser.state = genericOkInfo
-#     of genericOkWarningCount:
-#       parseFixed(packet.warningCount)
-#       if (capabilities and CLIENT_SESSION_TRACK) > 0:
-#         parser.state = genericOkSessionStateInfo
-#       else:
-#         parser.state = genericOkInfo
-#     of genericOkSessionStateInfo:
-#       discard
-#     of genericOkInfo:
-#       discard
-#     of genericFinished:
-#       parser.parseCount = pos
-#       return   
