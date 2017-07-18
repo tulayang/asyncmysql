@@ -65,6 +65,22 @@ const
   CLIENT_SSL_VERIFY_SERVER_CERT* = 1 shl 30
   CLIENT_REMEMBER_OPTIONS* = 1 shl 31
 
+const
+  SERVER_STATUS_IN_TRANS* = 1
+  SERVER_STATUS_AUTOCOMMIT* = 2
+  SERVER_MORE_RESULTS_EXISTS* = 8
+  SERVER_QUERY_NO_GOOD_INDEX_USED* = 16
+  SERVER_QUERY_NO_INDEX_USED* = 32
+  SERVER_STATUS_CURSOR_EXISTS* = 64
+  SERVER_STATUS_LAST_ROW_SENT* = 128
+  SERVER_STATUS_DB_DROPPED* = 256
+  SERVER_STATUS_NO_BACKSLASH_ESCAPES* = 512
+  SERVER_STATUS_METADATA_CHANGED* = 1024
+  SERVER_QUERY_WAS_SLOW* = 2048
+  SERVER_PS_OUT_PARAMS* = 4096
+  SERVER_STATUS_IN_TRANS_READONLY* = 8192
+  SERVER_SESSION_STATE_CHANGED* = 16384
+
 proc toProtocolHex*(x: Natural, len: Positive): string =
   ## For example: `(0xFAFF, 2)` => `"\xFF\xFA"`, `(0xFAFF00, 3)` => `"\x00\xFF\xFA"`. 
   var n = x
@@ -123,7 +139,8 @@ type
     packGenericOkAffectedRows,    packGenericOkLastInsertId,  packGenericOkServerStatus, 
     packGenericOkWarningCount,    packGenericOkStatusInfo,    packGenericOkSessionStateInfo,
     packGenericErrorCode,         packGenericErrorSqlState,   packGenericErrorSqlStateMarker,        
-    packGenericErrorMessage
+    packGenericErrorMessage,
+    packGenericEofWarningCount,   packGenericEofServerStatus
 
   LenEncodedState* = enum ## Parse state for length encoded integer or string.
     encodedFlagVal, encodedIntVal, encodedStrVal
@@ -505,14 +522,15 @@ proc parse*(p: var PacketParser, packet: var GenericPacket, handshakePacket: Han
         p.want = 1
         p.encodedState = encodedFlagVal
       of 0xFE:
-        initGenericPacket(packet, genericError)
-        if (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0:
-          discard # TODO
+        initGenericPacket(packet, genericEof)
+        if handshakePacket.protocol41:
+          p.state = packGenericEofWarningCount
+          p.want = 2
         else:
           p.state = packFinish
       of 0xFF:
-        initGenericPacket(packet, genericEof)
-        p.state = packGenericErrorCode # TODO
+        initGenericPacket(packet, genericError)
+        p.state = packGenericErrorCode 
         p.want = 2
       else:
         raise newException(ValueError, "invalid header")
@@ -522,12 +540,12 @@ proc parse*(p: var PacketParser, packet: var GenericPacket, handshakePacket: Han
     of packGenericOkLastInsertId:
       cond parseLenEncoded(p, packet.lastInsertId)
       if (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0 or 
-         (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0:
+         (handshakePacket.capabilities and CLIENT_TRANSACTIONS) > 0:
         p.state = packGenericOkServerStatus
         p.want = 2
       else:
         p.state = packGenericOkStatusInfo
-        if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+        if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
           p.want = p.wantPayloadLen
     of packGenericOkServerStatus:
       cond parseFixed(p, packet.serverStatus)
@@ -536,12 +554,12 @@ proc parse*(p: var PacketParser, packet: var GenericPacket, handshakePacket: Han
         p.want = 2
       else:
         p.state = packGenericOkStatusInfo
-        if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+        if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
           p.want = p.wantPayloadLen
     of packGenericOkWarningCount:
       cond parseFixed(p, packet.warningCount)
       p.state = packGenericOkStatusInfo
-      if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) == 0:
+      if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
         p.want = p.wantPayloadLen
     of packGenericOkStatusInfo:
       if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
@@ -553,6 +571,32 @@ proc parse*(p: var PacketParser, packet: var GenericPacket, handshakePacket: Han
         p.state = packFinish
     of packGenericOkSessionStateInfo:
       cond parseLenEncoded(p, packet.sessionStateInfo)
+      p.state = packFinish
+    of packGenericErrorCode:
+      cond parseFixed(p, packet.errorCode)
+      if handshakePacket.protocol41:
+        p.state = packGenericErrorSqlStateMarker
+        p.want = 1
+      else:
+        p.state = packGenericErrorMessage
+        p.want = p.wantPayloadLen  
+    of packGenericErrorSqlStateMarker:
+      cond parseFixed(p, packet.sqlStateMarker)
+      p.state = packGenericErrorSqlState
+      p.want = 5
+    of packGenericErrorSqlState:
+      cond parseFixed(p, packet.sqlState)
+      p.state = packGenericErrorMessage
+      p.want = p.wantPayloadLen  
+    of packGenericErrorMessage:
+      cond parseFixed(p, packet.errorMessage)
+      p.state = packFinish
+    of packGenericEofWarningCount:
+      cond parseFixed(p, packet.warningCountOfEof)
+      p.state = packGenericEofServerStatus
+      p.want = 2
+    of packGenericEofServerStatus:
+      cond parseFixed(p, packet.serverStatusOfEof)
       p.state = packFinish
     of packFinish:
       packet.sequenceId = p.sequenceId
