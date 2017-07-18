@@ -4,7 +4,7 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-#[
+#[ Handshake Initialization Packet
 3              packet Length 
 1              packet sequenceId
 1              [0a] protocolVersion serverVersion

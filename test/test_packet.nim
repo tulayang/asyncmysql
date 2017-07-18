@@ -40,8 +40,6 @@ suite "Handshake Authentication With Valid User":
 
   test "send client authentication packet with valid user":
     proc sendClientAuthentication() {.async.} =
-      var parser = initPacketParser() 
-      var packet: GenericPacket
       await send(
         socket, 
         toPacketHex(
@@ -55,6 +53,12 @@ suite "Handshake Authentication With Valid User":
             database: "mysql",
             protocol41: handshakePacket.protocol41), 
         MysqlPassword))
+    waitFor1 sendClientAuthentication()  
+
+  test "recv generic ok packet":
+    proc recvGenericOk() {.async.} =
+      var parser = initPacketParser() 
+      var packet: GenericPacket
       while true:
         var buf = await recv(socket, 32)
         write(stdout, "  OK Packet: ")
@@ -69,7 +73,7 @@ suite "Handshake Authentication With Valid User":
           echo "  Generic Ok Packet: ", packet
           check parser.sequenceId == 2
           break
-    waitFor1 sendClientAuthentication()  
+    waitFor1 recvGenericOk()  
 
 suite "Handshake Authentication With Invalid User":
   var socket = newAsyncSocket(buffered = false) 
@@ -91,8 +95,6 @@ suite "Handshake Authentication With Invalid User":
 
   test "send client authentication packet with invalid user":
     proc sendClientAuthentication() {.async.} =
-      var parser = initPacketParser() 
-      var packet: GenericPacket
       await send(
         socket, 
         toPacketHex(
@@ -106,6 +108,12 @@ suite "Handshake Authentication With Invalid User":
             database: "mysql",
             protocol41: handshakePacket.protocol41), 
         MysqlPassword))
+    waitFor1 sendClientAuthentication()
+
+  test "recv generic error packet":
+    proc recvGenericError() {.async.} =
+      var parser = initPacketParser() 
+      var packet: GenericPacket
       while true:
         var buf = await recv(socket, 16)
         write(stdout, "  Error Packet: ")
@@ -118,4 +126,4 @@ suite "Handshake Authentication With Invalid User":
           echo "  Generic Error Packet: ", packet
           check parser.sequenceId == 2
           break
-    waitFor1 sendClientAuthentication()  
+    waitFor1 recvGenericError()  
