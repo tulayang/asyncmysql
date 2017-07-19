@@ -81,6 +81,41 @@ const
   SERVER_STATUS_IN_TRANS_READONLY* = 8192
   SERVER_SESSION_STATE_CHANGED* = 16384
 
+type 
+  ServerCommand* = enum
+    COM_SLEEP, 
+    COM_QUIT, 
+    COM_INIT_DB, 
+    COM_QUERY, 
+    COM_FIELD_LIST, 
+    COM_CREATE_DB, 
+    COM_DROP_DB, 
+    COM_REFRESH, 
+    COM_DEPRECATED_1, 
+    COM_STATISTICS, 
+    COM_PROCESS_INFO, 
+    COM_CONNECT, 
+    COM_PROCESS_KILL, 
+    COM_DEBUG, 
+    COM_PING, 
+    COM_TIME, 
+    COM_DELAYED_INSERT, 
+    COM_CHANGE_USER, 
+    COM_BINLOG_DUMP, 
+    COM_TABLE_DUMP, 
+    COM_CONNECT_OUT, 
+    COM_REGISTER_SLAVE, 
+    COM_STMT_PREPARE, 
+    COM_STMT_EXECUTE, 
+    COM_STMT_SEND_LONG_DATA, 
+    COM_STMT_CLOSE, 
+    COM_STMT_RESET, 
+    COM_SET_OPTION, 
+    COM_STMT_FETCH, 
+    COM_DAEMON, 
+    COM_BINLOG_DUMP_GTID, 
+    COM_RESET_CONNECTION, COM_END
+
 proc toProtocolHex*(x: Natural, len: Positive): string =
   ## For example: `(0xFAFF, 2)` => `"\xFF\xFA"`, `(0xFAFF00, 3)` => `"\x00\xFF\xFA"`. 
   var n = x
@@ -171,7 +206,7 @@ type
     isLast: bool
     state: PacketState
     storeState: PacketState
-    encodedState: LenEncodedState
+    wantEncodedState: LenEncodedState
 
   HandshakePacket* = object       
     ## Packet from mysql server when connecting to the server that requires authentication.
@@ -237,7 +272,6 @@ type
     eofOfRow*: EofPacket
     # ...
 
-
 template cond(exp: untyped): untyped =
   case exp
   of progressOk:
@@ -277,7 +311,7 @@ proc initResultSetPacket(packet: var ResultSetPacket) =
 proc initPacketParser*(): PacketParser = 
   ## TODO: opmitize buffer
   result.state = packInitialization
-  result.encodedState = encodedFlagVal
+  result.wantEncodedState = encodedFlagVal
   result.want = 4  
 
 proc finished*(p: PacketParser): bool =
@@ -337,7 +371,7 @@ proc next(p: var PacketParser, state: PacketState, want: int, nextState: NextSta
   p.want = want
   case nextState
   of nextLenEncoded:
-    p.encodedState = encodedFlagVal
+    p.wantEncodedState = encodedFlagVal
 
 proc parseFixed(p: var PacketParser, field: var int): ProgressState =
   result = progressOk
@@ -389,7 +423,7 @@ proc parseFiller(p: var PacketParser): ProgressState =
 
 proc parseLenEncoded(p: var PacketParser, field: var int): ProgressState =
   while true:
-    case p.encodedState
+    case p.wantEncodedState
     of encodedFlagVal:
       var value: int
       let ret = parseFixed(p, value)
@@ -407,7 +441,7 @@ proc parseLenEncoded(p: var PacketParser, field: var int): ProgressState =
         p.want = 8
       else:
         raise newException(ValueError, "invalid encoded flag")  
-      p.encodedState = encodedIntVal
+      p.wantEncodedState = encodedIntVal
     of encodedIntVal:
       return parseFixed(p, field)
     else:
@@ -415,7 +449,7 @@ proc parseLenEncoded(p: var PacketParser, field: var int): ProgressState =
 
 proc parseLenEncoded(p: var PacketParser, field: var string): ProgressState =
   while true:
-    case p.encodedState
+    case p.wantEncodedState
     of encodedFlagVal:
       var value: int
       let ret = parseFixed(p, value)
@@ -423,7 +457,7 @@ proc parseLenEncoded(p: var PacketParser, field: var string): ProgressState =
         return ret
       assert value >= 0
       if value < 251:
-        p.encodedState = encodedStrVal
+        p.wantEncodedState = encodedStrVal
         p.want = value
         continue
       elif value == 0xFC:
@@ -434,14 +468,14 @@ proc parseLenEncoded(p: var PacketParser, field: var string): ProgressState =
         p.want = 8
       else:
         raise newException(ValueError, "invalid encoded flag")  
-      p.encodedState = encodedIntVal
+      p.wantEncodedState = encodedIntVal
     of encodedIntVal:
       var value: int
       let ret = parseFixed(p, value)
       if ret != progressOk:
         return ret
       p.want = value
-      p.encodedState = encodedStrVal
+      p.wantEncodedState = encodedStrVal
     of encodedStrVal:
       return parseFixed(p, field)
 
@@ -456,7 +490,6 @@ proc parseOnHeader(p: var PacketParser): ProgressState =
   p.sequenceId = toProtocolInt(p.word[3..3])
   p.word = ""
   p.wantPayloadLen = p.payloadLen
-  p.encodedState = encodedIntVal # TODO :wantEncodedState
   p.realLen = if p.bufLen - p.bufPos > p.wantPayloadLen: p.wantPayloadLen
               else: p.bufLen - p.bufPos
   inc(p.packetPos)
@@ -631,11 +664,10 @@ proc parse*(p: var PacketParser, packet: var ResultSetPacket, handshakePacket: H
     case p.state
     of packInitialization:
       initResultSetPacket(packet)
-      next(p, packResultSetColumnCount, 1)
+      next(p, packResultSetColumnCount, 1, nextLenEncoded)
       move(p)
     of packHeader:
       cond parseOnHeader(p)
-      p.encodedState = encodedIntVal
     of packResultSetColumnCount:
       cond parseLenEncoded(p, packet.columnCount)
       next(p, packResultSetCatalog, 1, nextLenEncoded)
@@ -847,41 +879,6 @@ proc format*(packet: ClientAuthenticationPacket, password: string): string =
     add(result, toProtocolHex(0, 1))
     add(result, packet.database)
     add(result, '\0')
-
-type
-  ServerCommand* = enum
-    COM_SLEEP, 
-    COM_QUIT, 
-    COM_INIT_DB, 
-    COM_QUERY, 
-    COM_FIELD_LIST, 
-    COM_CREATE_DB, 
-    COM_DROP_DB, 
-    COM_REFRESH, 
-    COM_DEPRECATED_1, 
-    COM_STATISTICS, 
-    COM_PROCESS_INFO, 
-    COM_CONNECT, 
-    COM_PROCESS_KILL, 
-    COM_DEBUG, 
-    COM_PING, 
-    COM_TIME, 
-    COM_DELAYED_INSERT, 
-    COM_CHANGE_USER, 
-    COM_BINLOG_DUMP, 
-    COM_TABLE_DUMP, 
-    COM_CONNECT_OUT, 
-    COM_REGISTER_SLAVE, 
-    COM_STMT_PREPARE, 
-    COM_STMT_EXECUTE, 
-    COM_STMT_SEND_LONG_DATA, 
-    COM_STMT_CLOSE, 
-    COM_STMT_RESET, 
-    COM_SET_OPTION, 
-    COM_STMT_FETCH, 
-    COM_DAEMON, 
-    COM_BINLOG_DUMP_GTID, 
-    COM_RESET_CONNECTION, COM_END
 
 template formatNoArgsComImpl(cmd: ServerCommand) = 
   const payloadLen = 1
