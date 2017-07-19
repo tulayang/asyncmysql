@@ -20,6 +20,12 @@ proc waitFor1(fut: Future[void]) =
       echo "  !!!FutureError: ", getCurrentExceptionMsg() 
   waitFor check()
 
+proc echoHex(messageHeader: string, s: string) =
+  write(stdout, messageHeader)
+  for c in s:
+    write(stdout, toHex(ord(c), 2), ' ')
+  write(stdout, '\L')
+
 suite "Handshake Authentication With Valid User":
   var socket = newAsyncSocket(buffered = false) 
   var handshakePacket: HandshakePacket
@@ -60,12 +66,9 @@ suite "Handshake Authentication With Valid User":
       var packet: GenericPacket
       while true:
         var buf = await recv(socket, 32)
-        write(stdout, "  Generic OK Packet: ")
         check toProtocolInt(buf[3] & "") == parser.sequenceId + 2
         check toProtocolInt(buf[4] & "") == 0
-        for c in buf:
-          write(stdout, toHex(ord(c), 2), ' ')
-        write(stdout, '\L')
+        echoHex "  Generic OK Packet: ", buf
         parse(parser, packet, handshakePacket, buf)
         if parser.finished:
           echo "  Generic Ok Packet: ", packet
@@ -117,10 +120,7 @@ suite "Handshake Authentication With Invalid User":
       var packet: GenericPacket
       while true:
         var buf = await recv(socket, 16)
-        write(stdout, "  Generic Error Packet: ")
-        for c in buf:
-          write(stdout, toHex(ord(c), 2), ' ')
-        write(stdout, '\L')
+        echoHex "  Generic Error Packet: ", buf 
         parse(parser, packet, handshakePacket, buf)
         if parser.finished:
           echo "  Generic Error Packet: ", packet
@@ -176,24 +176,89 @@ suite "Command Queury":
     waitFor1 recvGenericOk()  
 
   test "ping":
-    proc sendPing() {.async.} =
-      await send(socket, formatPingPacket())
-    waitFor1 sendPing()  
+    proc sendComPing() {.async.} =
+      await send(socket, formatComPing())
+    waitFor1 sendComPing()  
 
-    proc recvGenericError() {.async.} =
+    proc recvGenericOk() {.async.} =
       var parser = initPacketParser() 
       var packet: GenericPacket
       while true:
         var buf = await recv(socket, 32)
-        write(stdout, "  Generic Ok Packet: ")
-        for c in buf:
-          write(stdout, toHex(ord(c), 2), ' ')
-        write(stdout, '\L')
+        echoHex "  Generic Ok Packet: ", buf
         parse(parser, packet, handshakePacket, buf)
         if parser.finished:
           echo "  Generic Ok Packet: ", packet
           check packet.kind == genericOk
           break
-    waitFor1 recvGenericError()  
+    waitFor1 recvGenericOk()  
+
+  test "query `SELECT host, user form user;`":
+    proc sendComQuery() {.async.} =
+      await send(socket, formatComQuery("select host, user from user;"))
+    waitFor1 sendComQuery()  
+
+    proc recvResultSet() {.async.} =
+      var parser = initPacketParser() 
+      var packet: ResultSetPacket
+      while true:
+        var buf = await recv(socket, 16)
+        echoHex "  ResultSet Packet: ", buf
+        parse(parser, packet, handshakePacket, buf.cstring, buf.len)
+        if parser.finished:
+          echo "  ResultSet Packet: ", packet
+          #check packet.kind == genericOk
+          break
+    waitFor1 recvResultSet()  
+
+  # test "use {database} with `test` database":
+  #   proc sendComInitDb() {.async.} =
+  #     await send(socket, formatComInitDb("test"))
+  #   waitFor1 sendComInitDb()  
+
+  #   proc recvGenericOk() {.async.} =
+  #     var parser = initPacketParser() 
+  #     var packet: GenericPacket
+  #     while true:
+  #       var buf = await recv(socket, 32)
+  #       echoHex "  Generic Ok Packet: ", buf
+  #       parse(parser, packet, handshakePacket, buf)
+  #       if parser.finished:
+  #         echo "  Generic Ok Packet: ", packet
+  #         check packet.kind == genericOk
+  #         break
+  #   waitFor1 recvGenericOk()  
+
+  # test "use {database} with `aaa` (non-existent) database":
+  #   proc sendComInitDb() {.async.} =
+  #     await send(socket, formatComInitDb("aaa"))
+  #   waitFor1 sendComInitDb()  
+
+  #   proc recvGenericError() {.async.} =
+  #     var parser = initPacketParser() 
+  #     var packet: GenericPacket
+  #     while true:
+  #       var buf = await recv(socket, 32)
+  #       echoHex "  Generic Error Packet: ", buf
+  #       parse(parser, packet, handshakePacket, buf)
+  #       if parser.finished:
+  #         echo "  Generic Error Packet: ", packet
+  #         check packet.kind == genericError
+  #         break
+  #   waitFor1 recvGenericError()  
+
+  # test "quit":
+  #   proc sendComQuit() {.async.} =
+  #     await send(socket, formatComQuit())
+  #   waitFor1 sendComQuit()  
+
+  #   proc recvClosed() {.async.} =
+  #     var parser = initPacketParser() 
+  #     var packet: GenericPacket
+  #     while true:
+  #       var buf = await recv(socket, 1024)
+  #       check buf.len == 0
+  #       break
+  #   waitFor1 recvClosed()  
 
   close(socket)
