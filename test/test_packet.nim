@@ -195,14 +195,14 @@ suite "Command Queury":
 
   test "query `SELECT host, user form user;`":
     proc sendComQuery() {.async.} =
-      await send(socket, formatComQuery("select host, user from user;"))
+      await send(socket, formatComQuery("select @@version_comment limit 1;"))
     waitFor1 sendComQuery()  
 
     proc recvResultSet() {.async.} =
       var parser = initPacketParser() 
       var packet: ResultSetPacket
       while true:
-        var buf = await recv(socket, 16)
+        var buf = await recv(socket, 1024)
         echoHex "  ResultSet Packet: ", buf
         parse(parser, packet, handshakePacket, buf.cstring, buf.len)
         if parser.finished:

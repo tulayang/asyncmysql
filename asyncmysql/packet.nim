@@ -143,7 +143,7 @@ type
     packResultSetOrgName,         packResultSetFiller1,       packResultSetCharset,
     packResultSetColumnLen,       packResultSetColumnType,    packResultSetColumnFlags,
     packResultSetDecimals,        packResultSetFiller2,       packResultSetDefaultValue,
-    packResultSetEof1,            packResultSetRowData,       packResultSetEof2       
+    packResultSetEof1,            packResultSetRowData,       packResultSetEof2, packResultSetRowDataAll       
 
   LenEncodedState* = enum ## Parse state for length encoded integer or string.
     encodedFlagVal, encodedIntVal, encodedStrVal
@@ -235,6 +235,7 @@ type
     defaultValue*: string
 
     eofOfColumn*: EofPacket
+    eofOfRow*: EofPacket
     # ...
 
 
@@ -652,6 +653,48 @@ proc parse*(parser: var PacketParser, packet: var GenericPacket, handshakePacket
   ## Parse the ``buf`` data.
   parse(parser, packet, handshakePacket, buf.cstring, buf.len)
 
+proc parseOnEofPacket(p: var PacketParser, packet: var EofPacket, handshakePacket: HandshakePacket): ProgressState = 
+  while true:
+    case p.state
+    of packPayloadLength:
+      cond parseOnPayloadLen(p)
+    of packSequenceId:
+      cond parseOnSequenceId(p)
+      p.encodedState = encodedIntVal
+    of packGenericHeader:
+      var header: int
+      cond parseFixed(p, header)
+      assert header == 0xFE
+      if handshakePacket.protocol41:
+        next(p, packGenericEofWarningCount, 2)
+      else:
+        return progressOk
+    of packGenericEofWarningCount:
+      cond parseFixed(p, packet.warningCount)
+      next(p, packGenericEofServerStatus, 2)
+    of packGenericEofServerStatus:
+      cond parseFixed(p, packet.serverStatus)
+      return progressOk
+    else:
+      raise newException(ValueError, "imposible state")
+
+proc parseOnRowDataPacket(p: var PacketParser, handshakePacket: HandshakePacket): ProgressState = 
+  while true:
+    case p.state
+    of packPayloadLength:
+      cond parseOnPayloadLen(p)
+    of packSequenceId:
+      cond parseOnSequenceId(p)
+      p.encodedState = encodedIntVal # TODO
+      next(p, packResultSetRowDataAll, p.wantPayloadLen)
+    of packResultSetRowDataAll:
+      var s = ""
+      cond parseFixed(p, s)
+      echo repr s
+      return progressOk
+    else:
+      raise newException(ValueError, "imposible state")
+
 proc parse*(p: var PacketParser, packet: var ResultSetPacket, handshakePacket: HandshakePacket, buf: pointer, size: int) = 
   mount(p, buf, size)
   while true:
@@ -714,8 +757,21 @@ proc parse*(p: var PacketParser, packet: var ResultSetPacket, handshakePacket: H
       # else:
       next(p, packResultSetEof1)
     of packResultSetEof1:
+      next(p, packGenericHeader, 1)
+      move(p)
+      cond parseOnEofPacket(p, packet.eofOfColumn, handshakePacket)
+      next(p, packResultSetRowData)
+    of packResultSetRowData:
+      # TODO
+      next(p, packResultSetRowDataAll, 1)
+      move(p)
+      cond parseOnRowDataPacket(p, handshakePacket)
+      next(p, packResultSetEof2)
+    of packResultSetEof2:
+      next(p, packGenericHeader, 1)
+      move(p)
+      cond parseOnEofPacket(p, packet.eofOfRow, handshakePacket)
       next(p, packFinish)
-      # TODO 
     of packFinish:
       packet.sequenceId = p.sequenceId
       return
