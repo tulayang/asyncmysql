@@ -376,6 +376,7 @@ proc next(p: var PacketParser, state: PacketState, want: int, nextState: NextSta
 proc parseFixed(p: var PacketParser, field: var int): ProgressState =
   result = progressOk
   if p.want == 0:
+    field = 0
     return
   if p.realLen == 0:
     return checkIfMove(p)
