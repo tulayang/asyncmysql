@@ -375,6 +375,8 @@ proc next(p: var PacketParser, state: PacketState, want: int, nextState: NextSta
 
 proc parseFixed(p: var PacketParser, field: var int): ProgressState =
   result = progressOk
+  if p.realLen == 0:
+    return checkIfMove(p)
   let want = p.want
   joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.realLen)
   let n = want - p.want
@@ -388,6 +390,8 @@ proc parseFixed(p: var PacketParser, field: var int): ProgressState =
 
 proc parseFixed(p: var PacketParser, field: var string): ProgressState =
   result = progressOk
+  if p.realLen == 0:
+    return checkIfMove(p)
   let want = p.want
   joinFixedStr(field, p.want, offsetChar(p.buf, p.bufPos), p.realLen)
   let n = want - p.want
@@ -399,6 +403,8 @@ proc parseFixed(p: var PacketParser, field: var string): ProgressState =
 
 proc parseNul(p: var PacketParser, field: var string): ProgressState =
   result = progressOk
+  if p.realLen == 0:
+    return checkIfMove(p)
   let (finished, count) = joinNulStr(field, offsetChar(p.buf, p.bufPos), p.realLen)
   inc(p.bufPos, count)
   dec(p.realLen, count)
