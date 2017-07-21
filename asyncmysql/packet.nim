@@ -643,10 +643,13 @@ proc parseEof(p: var PacketParser, packet: var EofPacket, capabilities: int): Pr
       var header: int
       checkIfOk parseFixed(p, header)
       assert header == 0xFE
+      echo ";;;;;;;capabilities:", capabilities, " ", capabilities and CLIENT_PROTOCOL_41, " ", p.wantPayloadLen, " ", p.bufPos
       if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        echo "‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘"
         packet.state = eofWarningCount
         p.want = 2
       else:
+        echo "........................................."
         assert p.wantPayloadLen == 0
         return prgOk
     of eofWarningCount:
