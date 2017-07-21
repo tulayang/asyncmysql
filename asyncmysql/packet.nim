@@ -721,14 +721,17 @@ proc parseOk(p: var PacketParser, packet: var ResultPacket, capabilities: int): 
       else:
         nextStatusInfoReset
     of okStatusInfo:
-      echo "............", okStatusInfo
+      echo "............", okStatusInfo, " ", capabilities and CLIENT_SESSION_TRACK
       if (capabilities and CLIENT_SESSION_TRACK) > 0:
+        echo "........... checkIfOk parseLenEncoded(p, packet.message)", p.want, " ", p.wantPayloadLen
         checkIfOk parseLenEncoded(p, packet.message)
         packet.okState = okSessionState
         p.want = 1
         p.wantEncodedState = lenFlagVal
       else:
+        echo "........... checkIfOk parseFixed(p, packet.message)", p.want, " ", p.wantPayloadLen
         checkIfOk parseFixed(p, packet.message)
+        echo "........... checkIfOk parseFixed(p, packet.message) finished"
         return prgOk
     of okSessionState:
       echo "............", okSessionState
