@@ -364,7 +364,7 @@ proc move(p: var PacketParser) =
   p.want = 4  
   p.word = ""
 
-proc parseOnHeader(p: var PacketParser): ProgressState =
+proc parseHeader(p: var PacketParser): ProgressState =
   result = prgOk
   let w = p.want
   joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.bufLen - p.bufPos)
@@ -540,7 +540,7 @@ template checkIfOk(state: ProgressState): untyped =
   of prgBreak:
     return prgBreak
 
-proc parse(p: var PacketParser, packet: var HandshakePacket): ProgressState = 
+proc parseHandshake(p: var PacketParser, packet: var HandshakePacket): ProgressState = 
   while true:
     case packet.state
     of hssProtocolVersion:
@@ -622,9 +622,9 @@ proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size
       p.want = 1
       move(p)
     of packHeader:
-      checkPrg parseOnHeader(p)
+      checkPrg parseHeader(p)
     of packHandshake:
-      checkPrg parse(p, packet)
+      checkPrg parseHandshake(p, packet)
       p.state = packFinish
     of packFinish:
       packet.sequenceId = p.sequenceId
@@ -884,7 +884,7 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
       p.want = 1
       move(p)
     of packHeader:
-      checkPrg parseOnHeader(p)
+      checkPrg parseHeader(p)
     of packResultHeader:
       var header: int
       checkPrg parseFixed(p, header)
