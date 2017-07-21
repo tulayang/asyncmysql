@@ -193,7 +193,7 @@ suite "Command Queury":
           break
     waitFor1 recvEffectOk()  
 
-  test "query `SELECT host, user form user;`":
+  test "query `select host, user form user;`":
     proc sendComQuery() {.async.} =
       await send(socket, formatComQuery("SELECT host, user from user;"))
     waitFor1 sendComQuery()  
@@ -207,58 +207,78 @@ suite "Command Queury":
         parse(parser, packet, handshakePacket.capabilities, buf.cstring, buf.len)
         if parser.finished:
           echo "  ResultSet Packet: ", packet
-          #check packet.kind == effectOk
+          echo "  Buffer length: 1024, offset: ", parser.offset 
+          check packet.kind == rpkResultSet
           break
     waitFor1 recvResultSet()  
 
-  # test "use {database} with `test` database":
-  #   proc sendComInitDb() {.async.} =
-  #     await send(socket, formatComInitDb("test"))
-  #   waitFor1 sendComInitDb()  
+  test "query `select @@version_comment limit 1;`":
+    proc sendComQuery() {.async.} =
+      await send(socket, formatComQuery("select @@version_comment limit 1;"))
+    waitFor1 sendComQuery()  
 
-  #   proc recvEffectOk() {.async.} =
-  #     var parser = initPacketParser() 
-  #     var packet: ResultPacket
-  #     while true:
-  #       var buf = await recv(socket, 32)
-  #       echoHex "  Effect Ok Packet: ", buf
-  #       parse(parser, packet, handshakePacket.capabilities, buf)
-  #       if parser.finished:
-  #         echo "  Effect Ok Packet: ", packet
-  #         check packet.kind == rpkOk
-  #         break
-  #   waitFor1 recvEffectOk()  
+    proc recvResultSet() {.async.} =
+      var parser = initPacketParser() 
+      var packet: ResultPacket
+      while true:
+        var buf = await recv(socket, 3)
+        echoHex "  ResultSet Packet: ", buf
+        parse(parser, packet, handshakePacket.capabilities, buf.cstring, buf.len)
+        if parser.finished:
+          echo "  ResultSet Packet: ", packet
+          echo "  Buffer length: 3, offset: ", parser.offset 
+          check packet.kind == rpkResultSet
+          break
+    waitFor1 recvResultSet()  
 
-  # test "use {database} with `aaa` (non-existent) database":
-  #   proc sendComInitDb() {.async.} =
-  #     await send(socket, formatComInitDb("aaa"))
-  #   waitFor1 sendComInitDb()  
+  test "use {database} with `test` database":
+    proc sendComInitDb() {.async.} =
+      await send(socket, formatComInitDb("test"))
+    waitFor1 sendComInitDb()  
 
-  #   proc recvEffectError() {.async.} =
-  #     var parser = initPacketParser() 
-  #     var packet: ResultPacket
-  #     while true:
-  #       var buf = await recv(socket, 32)
-  #       echoHex "  Effect Error Packet: ", buf
-  #       parse(parser, packet, handshakePacket.capabilities, buf)
-  #       if parser.finished:
-  #         echo "  Effect Error Packet: ", packet
-  #         check packet.kind == rpkError
-  #         break
-  #   waitFor1 recvEffectError()  
+    proc recvEffectOk() {.async.} =
+      var parser = initPacketParser() 
+      var packet: ResultPacket
+      while true:
+        var buf = await recv(socket, 32)
+        echoHex "  Effect Ok Packet: ", buf
+        parse(parser, packet, handshakePacket.capabilities, buf)
+        if parser.finished:
+          echo "  Effect Ok Packet: ", packet
+          check packet.kind == rpkOk
+          break
+    waitFor1 recvEffectOk()  
 
-  # test "quit":
-  #   proc sendComQuit() {.async.} =
-  #     await send(socket, formatComQuit())
-  #   waitFor1 sendComQuit()  
+  test "use {database} with `aaa` (non-existent) database":
+    proc sendComInitDb() {.async.} =
+      await send(socket, formatComInitDb("aaa"))
+    waitFor1 sendComInitDb()  
 
-  #   proc recvClosed() {.async.} =
-  #     var parser = initPacketParser() 
-  #     var packet: ResultPacket
-  #     while true:
-  #       var buf = await recv(socket, 1024)
-  #       check buf.len == 0
-  #       break
-  #   waitFor1 recvClosed()  
+    proc recvEffectError() {.async.} =
+      var parser = initPacketParser() 
+      var packet: ResultPacket
+      while true:
+        var buf = await recv(socket, 32)
+        echoHex "  Effect Error Packet: ", buf
+        parse(parser, packet, handshakePacket.capabilities, buf)
+        if parser.finished:
+          echo "  Effect Error Packet: ", packet
+          check packet.kind == rpkError
+          break
+    waitFor1 recvEffectError()  
+
+  test "quit":
+    proc sendComQuit() {.async.} =
+      await send(socket, formatComQuit())
+    waitFor1 sendComQuit()  
+
+    proc recvClosed() {.async.} =
+      var parser = initPacketParser() 
+      var packet: ResultPacket
+      while true:
+        var buf = await recv(socket, 1024)
+        check buf.len == 0
+        break
+    waitFor1 recvClosed()  
 
   close(socket)
