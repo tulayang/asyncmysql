@@ -236,15 +236,6 @@ type
   ErrorState* = enum
     errErrorCode, errSqlState, errSqlStateMarker, errErrorMessage
 
-  ResultSetHeaderState* = enum
-    rhdExtra
-
-  ResultSetHeaderPacket* = object
-    columnCount*: int
-    extra*: string
-    atColumnCount: int
-    state: ResultSetHeaderState
-
   ResultSetColumnState* = enum
     colCatalog,    colSchema,      colTable,       
     colOrgTable,   colName,        colOrgName,
@@ -267,17 +258,8 @@ type
     defaultValue*: string
     state: ResultSetColumnState
 
-  ResultSetRowState* = enum
-    rowTODO
-    # packResultSetEof1Header,      packResultSetEof1WarningCount, packResultSetEof1ServerStatus            
-    # packResultSetRowData,         packResultSetRowDataAll,
-    # packResultSetEof2Header,      packResultSetEof2WarningCount, packResultSetEof2ServerStatus                      
-
-  ResultSetRowPacket* = object
-    state: ResultSetRowState
-
   ResultSetState* = enum
-    rsetHeader, rsetColumn, rsetColumnEof, rsetRow, rsetRowEof
+    rsetColumnHeader, rsetColumn, rsetColumnEof, rsetRowHeader, rsetRow, rsetRowEof
 
   ResultPacket* = object
     sequenceId*: int           
@@ -297,9 +279,14 @@ type
       errorMessage*: string
       errState: ErrorState
     of rpkResultSet:
-      header*: ResultSetHeaderPacket
+      extra*: string
+      columnsCount*: int
+      columnsPos: int
       columns*: seq[ResultSetColumnPacket]
       columnsEof*: EofPacket
+      rowsCount*: int
+      rowsPos: int
+      rows*: seq[string]
       rowsEof*: EofPacket
       rsetState: ResultSetState
 
@@ -313,10 +300,6 @@ proc initHandshakePacket(packet: var HandshakePacket) =
 proc initEofPacket(packet: var EofPacket) =
   packet.state = eofHeader   
 
-proc initResultSetHeaderPacket(packet: var ResultSetHeaderPacket) =
-  packet.extra = ""
-  packet.state = rhdExtra
-
 proc initResultSetColumnPacket(packet: var ResultSetColumnPacket) =
   packet.catalog = ""
   packet.schema = ""
@@ -326,9 +309,6 @@ proc initResultSetColumnPacket(packet: var ResultSetColumnPacket) =
   packet.orgName = ""
   packet.defaultValue = ""
   packet.state = colCatalog
-
-proc initResultSetRowPacket(packet: var ResultSetRowPacket) =
-  packet.state = rowTODO
 
 proc initResultPacket(packet: var ResultPacket, kind: ResultPacketKind) =
   packet.kind = kind
@@ -343,11 +323,12 @@ proc initResultPacket(packet: var ResultPacket, kind: ResultPacketKind) =
     packet.errorMessage = ""
     packet.errState = errErrorCode
   of rpkResultSet:
-    initResultSetHeaderPacket(packet.header)
+    packet.extra = ""
     packet.columns = @[]
     initEofPacket(packet.columnsEof)
+    packet.rows = @[]
     initEofPacket(packet.rowsEof)
-    packet.rsetState = rsetHeader
+    packet.rsetState = rsetColumnHeader
 
 proc initPacketParser*(): PacketParser = 
   ## TODO: opmitize buffer
@@ -372,20 +353,6 @@ proc mount(p: var PacketParser, buf: pointer, size: int) =
   if p.state != packInitialization and p.state != packHeader:
     p.bufRealLen = if p.wantPayloadLen <= size: p.wantPayloadLen
                    else: size
-
-# proc next(p: var PacketParser, state: PacketState) =
-#   p.state = state
-
-# proc next(p: var PacketParser, state: PacketState, want: int) =
-#   p.state = state
-#   p.want = want
-
-# proc next(p: var PacketParser, state: PacketState, want: int, nextState: NextState) =
-#   p.state = state
-#   p.want = want
-#   case nextState
-#   of nextLenEncoded:
-#     p.wantEncodedState = lenFlagVal
 
 proc move(p: var PacketParser) = 
   assert p.bufRealLen == 0
@@ -691,6 +658,25 @@ proc parseEof(p: var PacketParser, packet: var EofPacket, capabilities: int): Pr
       assert p.wantPayloadLen == 0
       return prgOk
 
+proc parseEof2(p: var PacketParser, packet: var EofPacket, capabilities: int): ProgressState =
+  while true:
+    case packet.state
+    of eofHeader:
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        packet.state = eofWarningCount
+        p.want = 2
+      else:
+        assert p.wantPayloadLen == 0
+        return prgOk
+    of eofWarningCount:
+      checkIfOk parseFixed(p, packet.warningCount)
+      packet.state = eofServerStatus
+      p.want = 2
+    of eofServerStatus:
+      checkIfOk parseFixed(p, packet.serverStatus)
+      assert p.wantPayloadLen == 0
+      return prgOk
+
 proc parseOk(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
   template nextStatusInfoWithTrack: untyped =
     packet.okState = okStatusInfo
@@ -767,16 +753,6 @@ proc parseError(p: var PacketParser, packet: var ResultPacket, capabilities: int
       checkIfOk parseFixed(p, packet.errorMessage)
       return prgOk
 
-proc parseResultSetHeader(p: var PacketParser, packet: var ResultSetHeaderPacket): ProgressState =
-  while true:
-    case packet.state
-    # of rhdColumnCount:
-    #   checkIfOk parseLenEncoded(p, packet.columnCount)
-    #   assert p.wantPayloadLen == 0
-    #   return prgOk
-    of rhdExtra:
-      return prgOk # TODO
-
 proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket): ProgressState =
   while true:
     case packet.state
@@ -850,10 +826,10 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
 proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
   while true:
     case packet.rsetState
-    of rsetHeader:
-      checkIfOk parseResultSetHeader(p, packet.header)
-      if packet.header.columnCount > 0:
-        for i in 0..<packet.header.columnCount:
+    of rsetColumnHeader:
+      checkIfOk parseFixed(p, packet.extra)
+      if packet.columnsCount > 0:
+        for i in 0..<packet.columnsCount:
           var column: ResultSetColumnPacket
           initResultSetColumnPacket(column)
           packet.columns.add(column)
@@ -863,27 +839,41 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
       else:
         packet.rsetState = rsetColumnEof
         p.want = 1
-      move(p)
-      return prgContinue
     of rsetColumn:
-      checkIfOk parseResultSetColumn(p, packet.columns[packet.header.atColumnCount])
-      inc(packet.header.atColumnCount)
-      if packet.header.atColumnCount < packet.header.columnCount:
+      checkIfOk parseResultSetColumn(p, packet.columns[packet.columnsPos])
+      inc(packet.columnsPos)
+      if packet.columnsPos < packet.columnsCount:
         packet.rsetState = rsetColumn
         p.want = 1
         p.wantEncodedState = lenFlagVal  
       else:
         packet.rsetState = rsetColumnEof
         p.want = 1
-      move(p)
-      return prgContinue
     of rsetColumnEof:
       checkIfOk parseEof(p, packet.columnsEof, capabilities)
-      return prgOk
+      packet.rsetState = rsetRowHeader
+      p.want = 1
+      p.wantEncodedState = lenFlagVal  
+    of rsetRowHeader: 
+      var header: int
+      checkIfOk parseFixed(p, header)
+      if header == 0xFE and p.payloadLen < 9:
+        packet.rsetState = rsetRowEof
+        p.want = 1
+        continue
+      packet.rowsCount = header
+      packet.rsetState = rsetRow
+      p.want = header
     of rsetRow:
-      discard # TODO
+      packet.rows.add("")
+      checkIfOk parseFixed(p, packet.rows[packet.rowsPos])
+      inc(packet.rowsPos)
+      packet.rsetState = rsetRowHeader
+      p.want = 1
+      p.wantEncodedState = lenFlagVal 
     of rsetRowEof:
-      discard # TODO
+      checkIfOk parseEof2(p, packet.rowsEof, capabilities)
+      return prgOk
 
 proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: pointer, size: int) = 
   mount(p, buf, size)
@@ -911,8 +901,9 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
         p.wantEncodedState = lenFlagVal
       else:
         initResultPacket(packet, rpkResultSet)
-        packet.header.columnCount = header
+        packet.columnsCount = header
         p.state = packResultSet
+        p.want = p.wantPayloadLen
         # TODO extra
     of packResultOk:
       checkPrg parseOk(p, packet, capabilities)
@@ -932,66 +923,6 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
 proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: string) =
   ## Parse the ``buf`` data.
   parse(p, packet, capabilities, buf.cstring, buf.len)
-
-
-# proc parse*(p: var PacketParser, packet: var ResultSetPacket, capabilities: int, buf: pointer, size: int) = 
-#   mount(p, buf, size)
-#   while true:
-#     case p.state
-#     of packInitialization:
-#       initResultSetPacket(packet)
-#       p.state = packResultSet
-#       p.want = 1
-#       p.wantEncodedState = lenFlagVal
-#       move(p)
-#     of packHeader:
-#       checkPrg parseOnHeader(p)
-#     of packResultSet: 
-#       while true:
-#         case packet.state
-#         of rsetHeader:
-#           checkPrg parse(p, packet.header)
-#           echo "=========" & $packet
-#           if packet.header.columnCount > 0:
-#             for i in 0..<packet.header.columnCount:
-#               var column: ResultSetColumnPacket
-#               initResultSetColumnPacket(column)
-#               packet.columns.add(column)
-#             packet.state = rsetColumn
-#             p.want = 1
-#             p.wantEncodedState = lenFlagVal  
-#           else:
-#             packet.state = rsetColumnEof
-#             p.want = 1
-#           move(p)
-#           break
-#         of rsetColumn:
-#           checkPrg parse(p, packet.columns[packet.header.atColumnCount])
-#           inc(packet.header.atColumnCount)
-#           if packet.header.atColumnCount < packet.header.columnCount:
-#             packet.state = rsetColumn
-#             p.want = 1
-#             p.wantEncodedState = lenFlagVal  
-#           else:
-#             packet.state = rsetColumnEof
-#             p.want = 1
-#           move(p)
-#           break
-#         of rsetColumnEof:
-#           checkPrg parse(p, packet.columnsEof, capabilities)
-#           p.state = packFinish
-#           break
-#         of rsetRow:
-#           discard
-#         of rsetRowEof:
-#           discard
-#     of packFinish:
-#       packet.sequenceId = p.sequenceId
-#       return
-#     else:
-#       raise newException(ValueError, "imposible state")
-
-
 
 type
   ClientAuthenticationPacket* = object 
