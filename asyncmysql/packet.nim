@@ -693,6 +693,7 @@ proc parseOk(p: var PacketParser, packet: var ResultPacket, capabilities: int): 
       p.want = 1
       p.wantEncodedState = lenFlagVal
     of okLastInsertId:
+      echo "............", capabilities, " ", capabilities and CLIENT_PROTOCOL_41, " ", capabilities and CLIENT_TRANSACTIONS
       checkIfOk parseLenEncoded(p, packet.lastInsertId)
       if (capabilities and CLIENT_PROTOCOL_41) > 0 or 
          (capabilities and CLIENT_TRANSACTIONS) > 0:
