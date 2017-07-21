@@ -581,7 +581,7 @@ proc parseHandshake(p: var PacketParser, packet: var HandshakePacket): ProgressS
         p.want = 13
     of hssCapabilities2:
       checkIfOk parseFixed(p, packet.capabilities2)
-      packet.capabilities = packet.capabilities1 + 16 * packet.capabilities2
+      packet.capabilities = packet.capabilities1 + 65536 * packet.capabilities2 # 16*16*16*1
       packet.state = hssFiller1
       p.want = 1
     of hssFiller1:
@@ -643,13 +643,10 @@ proc parseEof(p: var PacketParser, packet: var EofPacket, capabilities: int): Pr
       var header: int
       checkIfOk parseFixed(p, header)
       assert header == 0xFE
-      echo ";;;;;;;capabilities:", capabilities, " ", capabilities and CLIENT_PROTOCOL_41, " ", p.wantPayloadLen, " ", p.bufPos
       if (capabilities and CLIENT_PROTOCOL_41) > 0:
-        echo "‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘’‘"
         packet.state = eofWarningCount
         p.want = 2
       else:
-        echo "........................................."
         assert p.wantPayloadLen == 0
         return prgOk
     of eofWarningCount:
