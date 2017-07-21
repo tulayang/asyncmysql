@@ -158,46 +158,14 @@ proc joinNulStr(s: var string, buf: pointer, size: int): tuple[finished: bool, c
       s.add(offsetCharVal(buf, i))
 
 type
-  PacketState* = enum ## Parse state of the ``PacketParser``.
-    packInitialization,           packHeader,                    packFinish, 
-
-    packHandshakeProtocolVersion, packHandshakeServerVersion,    packHandshakeThreadId, 
-    packHandshakeScrambleBuff1,   packHandshakeFiller0,          packHandshakeCapabilities1, 
-    packHandshakeCharSet,         packHandshakeStatus,           packHandshakeCapabilities2, 
-    packHandshakeFiller1,         packHandshakeFiller2,          packHandshakeScrambleBuff2, 
-    packHandshakeFiller3,         packHandshakePlugin, 
-
-    packGenericHeader,
-    packGenericOkAffectedRows,    packGenericOkLastInsertId,     packGenericOkServerStatus, 
-    packGenericOkWarningCount,    packGenericOkStatusInfo,       packGenericOkSessionState,
-    packGenericErrorCode,         packGenericErrorSqlState,      packGenericErrorSqlStateMarker,        
-    packGenericErrorMessage,
-
-    packResultSetColumnCount,     packResultSetCatalog,          packResultSetSchema, 
-    packResultSetTable,           packResultSetOrgTable,         packResultSetName,
-    packResultSetOrgName,         packResultSetFiller1,          packResultSetCharset,
-    packResultSetColumnLen,       packResultSetColumnType,       packResultSetColumnFlags,
-    packResultSetDecimals,        packResultSetFiller2,          packResultSetDefaultValue,
-    packResultSetEof1Header,      packResultSetEof1WarningCount, packResultSetEof1ServerStatus            
-    packResultSetRowData,         packResultSetRowDataAll,
-    packResultSetEof2Header,      packResultSetEof2WarningCount, packResultSetEof2ServerStatus                      
-
-  LenEncodedState* = enum ## Parse state for length encoded integer or string.
-    encodedFlagVal, encodedIntVal, encodedStrVal
-
-  ProgressState* = enum 
-    progressOk, progressContinue, progressBreak
-
-  NextState = enum
-    nextLenEncoded
-
   PacketParser* = object ## The packet parser object.
     buf: pointer
     bufLen: int
     bufPos: int
-    realLen: int
+    bufRealLen: int
     packetPos: int
     word: string
+    storeWord: string
     want: int
     payloadLen: int
     sequenceId: int
@@ -207,6 +175,32 @@ type
     state: PacketState
     storeState: PacketState
     wantEncodedState: LenEncodedState
+
+  LenEncodedState* = enum ## Parse state for length encoded integer or string.
+    lenFlagVal, lenIntVal, lenStrVal
+
+  ProgressState* = enum 
+    prgOk, prgContinue, prgBreak
+
+  NextState = enum
+    nextLenEncoded
+
+  PacketState* = enum ## Parse state of the ``PacketParser``.
+    packInitialization, 
+    packHeader, 
+    packFinish, 
+    packHandshake, 
+    packEffectHeader, 
+    packEffectOk, 
+    packEffectError,
+    packResultSet
+
+  HandshakeState* = enum
+    hssProtocolVersion, hssServerVersion, hssThreadId, 
+    hssScrambleBuff1,   hssFiller0,       hssCapabilities1, 
+    hssCharSet,         hssStatus,        hssCapabilities2, 
+    hssFiller1,         hssFiller2,       hssScrambleBuff2, 
+    hssFiller3,         hssPlugin
 
   HandshakePacket* = object       
     ## Packet from mysql server when connecting to the server that requires authentication.
@@ -225,36 +219,60 @@ type
     scrambleBuff*: string      # 8 + [12]
     plugin*: string            # NullTerminatedString 
     protocol41*: bool
+    state: HandshakeState
 
-  GenericPacketKind* = enum
-    genericOk, genericError  
+  EffectOkState* = enum
+    eokAffectedRows, eokLastInsertId, eokServerStatus, 
+    eokWarningCount, eokStatusInfo,   eokSessionState
 
-  GenericPacket* = object
+  EffectErrorState* = enum
+    eerErrorCode, eerSqlState, eerSqlStateMarker, eerErrorMessage
+
+  EffectPacketKind* = enum
+    effpOk, effpError  
+
+  EffectPacket* = object
     sequenceId*: int           
-    case kind*: GenericPacketKind
-    of genericOk:
+    case kind*: EffectPacketKind
+    of effpOk:
       affectedRows*: int
       lastInsertId*: int
       serverStatus*: int
       warningCount*: int
       message*: string
       sessionState*: string
-    of genericError:
+      okState: EffectOkState
+    of effpError:
       errorCode*: int  
       sqlStateMarker*: string
       sqlState*: string
       errorMessage*: string
+      errState: EffectErrorState
+
+  EofState* = enum
+    eofHeader, eofWarningCount, eofServerStatus
 
   EofPacket* = object
     warningCount*: int
     serverStatus*: int 
+    state: EofState
 
-  ResultSetPacket* = object
-    sequenceId*: int
+  ResultSetHeaderState* = enum
+    rhdColumnCount, rhdExtra
 
+  ResultSetHeaderPacket* = object
     columnCount*: int
     extra*: string
+    state: ResultSetHeaderState
 
+  ResultSetColumnState* = enum
+    rcolCatalog,    rcolSchema,      rcolTable,       
+    rcolOrgTable,   rcolName,        rcolOrgName,
+    rcolFiller1,    rcolCharset,     rcolColumnLen,   
+    rcolColumnType, rcolColumnFlags, rcolDecimals,    
+    rcolFiller2,    rcolDefaultValue
+
+  ResultSetColumnPacket* = object
     catalog*: string
     schema*: string
     table*: string
@@ -267,39 +285,53 @@ type
     columnFlags*: int
     decimals*: int
     defaultValue*: string
+    state: ResultSetColumnState
 
-    eofOfColumn*: EofPacket
-    eofOfRow*: EofPacket
-    # ...
+  ResultSetRowDataState* = enum
+    rowENUM
+    # packResultSetEof1Header,      packResultSetEof1WarningCount, packResultSetEof1ServerStatus            
+    # packResultSetRowData,         packResultSetRowDataAll,
+    # packResultSetEof2Header,      packResultSetEof2WarningCount, packResultSetEof2ServerStatus                      
 
-template cond(exp: untyped): untyped =
-  case exp
-  of progressOk:
-    discard
-  of progressContinue:
-    continue
-  of progressBreak:
-    return
+  ResultSetState* = enum
+    rsetHeader, rsetColumn, rsetColumnEof, rsetRow, rsetRowEof
+
+  ResultSetPacket* = object
+    sequenceId*: int
+    header*: ResultSetHeaderPacket
+    columns*: seq[ResultSetColumnPacket]
+    columnsEof*: EofPacket
+    rowsEof*: EofPacket
+    state: ResultSetState
 
 proc initHandshakePacket(packet: var HandshakePacket) =
   packet.serverVersion = ""
   packet.scrambleBuff1 = ""
   packet.scrambleBuff2 = ""
   packet.plugin = ""
+  packet.state = hssProtocolVersion
 
-proc initGenericPacket(packet: var GenericPacket, kind: GenericPacketKind) =
+proc initEffectPacket(packet: var EffectPacket, kind: EffectPacketKind) =
   packet.kind = kind
   case kind
-  of genericOk:
+  of effpOk:
     packet.message = ""
     packet.sessionState = ""
-  of genericError:
+    packet.okState = eokAffectedRows
+  of effpError:
     packet.sqlStateMarker = ""
     packet.sqlState = ""
     packet.errorMessage = ""
+    packet.errState = eerErrorCode
 
-proc initResultSetPacket(packet: var ResultSetPacket) =
+proc initEofPacket(packet: var EofPacket) =
+  packet.state = eofHeader
+
+proc initResultSetHeaderPacket(packet: var ResultSetHeaderPacket) =
   packet.extra = ""
+  packet.state = rhdColumnCount
+
+proc initResultSetColumnPacket(packet: var ResultSetColumnPacket) =
   packet.catalog = ""
   packet.schema = ""
   packet.table = ""
@@ -307,12 +339,23 @@ proc initResultSetPacket(packet: var ResultSetPacket) =
   packet.name = ""
   packet.orgName = ""
   packet.defaultValue = ""
+  packet.state = rcolCatalog
+
+# proc initResultSetRowPacket(packet: var ResultSetPacket) =
+    
+proc initResultSetPacket(packet: var ResultSetPacket) =
+  initResultSetHeaderPacket(packet.header)
+  packet.columns = @[]
+  initEofPacket(packet.columnsEof)
+  initEofPacket(packet.rowsEof)
+  packet.state = rsetHeader
 
 proc initPacketParser*(): PacketParser = 
   ## TODO: opmitize buffer
   result.state = packInitialization
-  result.wantEncodedState = encodedFlagVal
+  result.wantEncodedState = lenFlagVal
   result.want = 4  
+  result.word = ""
 
 proc finished*(p: PacketParser): bool =
   result = p.state == packFinish
@@ -328,63 +371,86 @@ proc mount(p: var PacketParser, buf: pointer, size: int) =
   p.bufLen = size
   p.bufPos = 0
   if p.state != packInitialization and p.state != packHeader:
-    p.realLen = if p.wantPayloadLen <= size: p.wantPayloadLen
-                else: size
+    p.bufRealLen = if p.wantPayloadLen <= size: p.wantPayloadLen
+                   else: size
+
+# proc next(p: var PacketParser, state: PacketState) =
+#   p.state = state
+
+# proc next(p: var PacketParser, state: PacketState, want: int) =
+#   p.state = state
+#   p.want = want
+
+# proc next(p: var PacketParser, state: PacketState, want: int, nextState: NextState) =
+#   p.state = state
+#   p.want = want
+#   case nextState
+#   of nextLenEncoded:
+#     p.wantEncodedState = lenFlagVal
 
 proc move(p: var PacketParser) = 
+  assert p.bufRealLen == 0
+  assert p.wantPayloadLen == 0
   p.storeState = p.state
+  p.storeWord = p.word
   p.storeWant = p.want
   p.state = packHeader
   p.want = 4  
   p.word = ""
-  p.isLast = true
-  p.realLen = 0
-  
+
+proc parseOnHeader(p: var PacketParser): ProgressState =
+  result = prgOk
+  let w = p.want
+  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.bufLen - p.bufPos)
+  inc(p.bufPos, w - p.want)
+  if p.want > 0: 
+    return prgBreak
+  p.payloadLen = toProtocolInt(p.word[0..2])
+  p.sequenceId = toProtocolInt(p.word[3..3])
+  p.wantPayloadLen = p.payloadLen
+  p.bufRealLen = if p.bufLen - p.bufPos > p.wantPayloadLen: p.wantPayloadLen
+                 else: p.bufLen - p.bufPos
+  inc(p.packetPos)
+  if p.payloadLen == 0xFFFFFF:
+    p.isLast = false
+  elif p.payloadLen == 0:
+    p.isLast = true
+  p.word = p.storeWord
+  p.want = p.storeWant
+  p.state = p.storeState
+  p.storeState = packInitialization
+
 proc checkIfMove(p: var PacketParser): ProgressState =
-  assert p.realLen == 0
+  assert p.bufRealLen == 0
   if p.bufLen > p.bufPos:
     assert p.wantPayloadLen == 0
     if p.isLast:
       raise newException(ValueError, "invalid packet")
     else:
       move(p)
-      return progressContinue
+      return prgContinue
   else: 
     if p.wantPayloadLen > 0:
-      return progressBreak
+      return prgBreak
     else: # == 0
       if p.isLast:
         raise newException(ValueError, "invalid packet")
       else:
         move(p)
-        return progressContinue
-
-proc next(p: var PacketParser, state: PacketState) =
-  p.state = state
-
-proc next(p: var PacketParser, state: PacketState, want: int) =
-  p.state = state
-  p.want = want
-
-proc next(p: var PacketParser, state: PacketState, want: int, nextState: NextState) =
-  p.state = state
-  p.want = want
-  case nextState
-  of nextLenEncoded:
-    p.wantEncodedState = encodedFlagVal
+        return prgContinue
 
 proc parseFixed(p: var PacketParser, field: var int): ProgressState =
-  result = progressOk
+  result = prgOk
   if p.want == 0:
     field = 0
     return
-  if p.realLen == 0:
+  if p.bufRealLen == 0:
     return checkIfMove(p)
   let want = p.want
-  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.realLen)
+  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.bufRealLen)
   let n = want - p.want
   inc(p.bufPos, n)
-  dec(p.realLen, n)
+  dec(p.bufRealLen, n)
   dec(p.wantPayloadLen, n)
   if p.want > 0:
     return checkIfMove(p)
@@ -392,58 +458,58 @@ proc parseFixed(p: var PacketParser, field: var int): ProgressState =
   p.word = ""
 
 proc parseFixed(p: var PacketParser, field: var string): ProgressState =
-  result = progressOk
+  result = prgOk
   if p.want == 0:
     return
-  if p.realLen == 0:
+  if p.bufRealLen == 0:
     return checkIfMove(p)
   let want = p.want
-  joinFixedStr(field, p.want, offsetChar(p.buf, p.bufPos), p.realLen)
+  joinFixedStr(field, p.want, offsetChar(p.buf, p.bufPos), p.bufRealLen)
   let n = want - p.want
   inc(p.bufPos, n)
-  dec(p.realLen, n)
+  dec(p.bufRealLen, n)
   dec(p.wantPayloadLen, n)
   if p.want > 0:
     return checkIfMove(p)
 
 proc parseNul(p: var PacketParser, field: var string): ProgressState =
-  result = progressOk
-  if p.realLen == 0:
+  result = prgOk
+  if p.bufRealLen == 0:
     return checkIfMove(p)
-  let (finished, count) = joinNulStr(field, offsetChar(p.buf, p.bufPos), p.realLen)
+  let (finished, count) = joinNulStr(field, offsetChar(p.buf, p.bufPos), p.bufRealLen)
   inc(p.bufPos, count)
-  dec(p.realLen, count)
+  dec(p.bufRealLen, count)
   dec(p.wantPayloadLen, count)
   if not finished:
     return checkIfMove(p)
 
 proc parseFiller(p: var PacketParser): ProgressState =
-  result = progressOk
-  if p.want > p.realLen:
-    inc(p.bufPos, p.realLen)
-    dec(p.wantPayloadLen, p.realLen)
-    dec(p.want, p.realLen)
-    dec(p.realLen, p.realLen)
+  result = prgOk
+  if p.want > p.bufRealLen:
+    inc(p.bufPos, p.bufRealLen)
+    dec(p.wantPayloadLen, p.bufRealLen)
+    dec(p.want, p.bufRealLen)
+    dec(p.bufRealLen, p.bufRealLen)
     return checkIfMove(p)
   else:  
     let n = p.want
     inc(p.bufPos, n)
-    dec(p.realLen, n)
+    dec(p.bufRealLen, n)
     dec(p.wantPayloadLen, n)
     dec(p.want, n)
 
 proc parseLenEncoded(p: var PacketParser, field: var int): ProgressState =
   while true:
     case p.wantEncodedState
-    of encodedFlagVal:
+    of lenFlagVal:
       var value: int
       let ret = parseFixed(p, value)
-      if ret != progressOk:
+      if ret != prgOk:
         return ret
       assert value >= 0
       if value < 251:
         field = value
-        return progressOk
+        return prgOk
       elif value == 0xFC:
         p.want = 2
       elif value == 0xFD:
@@ -452,8 +518,8 @@ proc parseLenEncoded(p: var PacketParser, field: var int): ProgressState =
         p.want = 8
       else:
         raise newException(ValueError, "invalid encoded flag")  
-      p.wantEncodedState = encodedIntVal
-    of encodedIntVal:
+      p.wantEncodedState = lenIntVal
+    of lenIntVal:
       return parseFixed(p, field)
     else:
       raise newException(ValueError, "imposible state")
@@ -461,14 +527,14 @@ proc parseLenEncoded(p: var PacketParser, field: var int): ProgressState =
 proc parseLenEncoded(p: var PacketParser, field: var string): ProgressState =
   while true:
     case p.wantEncodedState
-    of encodedFlagVal:
+    of lenFlagVal:
       var value: int
       let ret = parseFixed(p, value)
-      if ret != progressOk:
+      if ret != prgOk:
         return ret
       assert value >= 0
       if value < 251:
-        p.wantEncodedState = encodedStrVal
+        p.wantEncodedState = lenStrVal
         p.want = value
         continue
       elif value == 0xFC:
@@ -479,37 +545,106 @@ proc parseLenEncoded(p: var PacketParser, field: var string): ProgressState =
         p.want = 8
       else:
         raise newException(ValueError, "invalid encoded flag")  
-      p.wantEncodedState = encodedIntVal
-    of encodedIntVal:
+      p.wantEncodedState = lenIntVal
+    of lenIntVal:
       var value: int
       let ret = parseFixed(p, value)
-      if ret != progressOk:
+      if ret != prgOk:
         return ret
       p.want = value
-      p.wantEncodedState = encodedStrVal
-    of encodedStrVal:
+      p.wantEncodedState = lenStrVal
+    of lenStrVal:
       return parseFixed(p, field)
 
-proc parseOnHeader(p: var PacketParser): ProgressState =
-  result = progressOk
-  let w = p.want
-  joinFixedStr(p.word, p.want, offsetChar(p.buf, p.bufPos), p.bufLen - p.bufPos)
-  inc(p.bufPos, w - p.want)
-  if p.want > 0: 
-    return progressBreak
-  p.payloadLen = toProtocolInt(p.word[0..2])
-  p.sequenceId = toProtocolInt(p.word[3..3])
-  p.word = ""
-  p.wantPayloadLen = p.payloadLen
-  p.realLen = if p.bufLen - p.bufPos > p.wantPayloadLen: p.wantPayloadLen
-              else: p.bufLen - p.bufPos
-  inc(p.packetPos)
-  if p.payloadLen == 0xFFFFFF:
-    p.isLast = false
-  elif p.payloadLen == 0:
-    p.isLast = true
-  next(p, p.storeState, p.storeWant)  
-  p.storeState = packInitialization
+template checkPrg(state: ProgressState): untyped =
+  case state
+  of prgOk:
+    discard
+  of prgContinue:
+    continue
+  of prgBreak:
+    return
+
+template checkIfOk(state: ProgressState): untyped =
+  case state
+  of prgOk:
+    discard
+  of prgContinue:
+    return prgContinue
+  of prgBreak:
+    return prgBreak
+
+proc parse*(p: var PacketParser, packet: var HandshakePacket): ProgressState = 
+  while true:
+    case packet.state
+    of hssProtocolVersion:
+      checkIfOk parseFixed(p, packet.protocolVersion)
+      packet.state = hssServerVersion
+    of hssServerVersion:
+      checkIfOk parseNul(p, packet.serverVersion)
+      packet.state = hssThreadId
+      p.want = 4
+    of hssThreadId:
+      checkIfOk parseFixed(p, packet.threadId)
+      packet.state = hssScrambleBuff1
+      p.want = 8
+    of hssScrambleBuff1:
+      checkIfOk parseFixed(p, packet.scrambleBuff1)
+      packet.state = hssFiller0
+      p.want = 1
+    of hssFiller0:
+      checkIfOk parseFiller(p)
+      packet.state = hssCapabilities1
+      p.want = 2
+    of hssCapabilities1:
+      checkIfOk parseFixed(p, packet.capabilities1)
+      packet.state = hssCharSet
+      p.want = 1
+    of hssCharSet:
+      checkIfOk parseFixed(p, packet.charset)
+      packet.state = hssStatus
+      p.want = 2
+    of hssStatus:
+      checkIfOk parseFixed(p, packet.serverStatus)
+      packet.protocol41 = (packet.capabilities1 and CLIENT_PROTOCOL_41) > 0
+      if packet.protocol41:
+        packet.state = hssCapabilities2
+        p.want = 2
+      else:
+        packet.state = hssFiller3
+        p.want = 13
+    of hssCapabilities2:
+      checkIfOk parseFixed(p, packet.capabilities2)
+      packet.capabilities = packet.capabilities1 + 16 * packet.capabilities2
+      packet.state = hssFiller1
+      p.want = 1
+    of hssFiller1:
+      checkIfOk parseFixed(p, packet.scrambleLen)
+      packet.state = hssFiller2
+      p.want = 10
+    of hssFiller2:
+      checkIfOk parseFiller(p)
+      # scrambleBuff2 should be 0x00 terminated, but sphinx does not do this
+      # so we assume scrambleBuff2 to be 12 byte and treat the next byte as a
+      # filler byte.
+      packet.state = hssScrambleBuff2
+      p.want = 12
+    of hssScrambleBuff2:
+      checkIfOk parseFixed(p, packet.scrambleBuff2)
+      packet.scrambleBuff = packet.scrambleBuff1 & packet.scrambleBuff2
+      packet.state = hssFiller3
+      p.want = 1
+    of hssFiller3:
+      checkIfOk parseFiller(p)
+      if p.isLast and p.wantPayloadLen == 0:
+        return prgOk
+      else:  
+        packet.state = hssPlugin
+    of hssPlugin:
+      # According to the docs this should be 0x00 terminated, but MariaDB does
+      # not do this, so we assume this string to be packet terminated.
+      checkIfOk parseNul(p, packet.plugin)
+      return prgOk
 
 proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size: int) = 
   mount(p, buf, size)
@@ -517,257 +652,294 @@ proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size
     case p.state
     of packInitialization:
       initHandshakePacket(packet)
-      next(p, packHandshakeProtocolVersion, 1)
+      p.state = packHandshake
+      p.want = 1
       move(p)
     of packHeader:
-      cond parseOnHeader(p)
-    of packHandshakeProtocolVersion:
-      cond parseFixed(p, packet.protocolVersion)
-      next(p, packHandshakeServerVersion)
-    of packHandshakeServerVersion:
-      cond parseNul(p, packet.serverVersion)
-      next(p, packHandshakeThreadId, 4)
-    of packHandshakeThreadId:
-      cond parseFixed(p, packet.threadId)
-      next(p, packHandshakeScrambleBuff1, 8)
-    of packHandshakeScrambleBuff1:
-      cond parseFixed(p, packet.scrambleBuff1)
-      next(p, packHandshakeFiller0, 1)
-    of packHandshakeFiller0:
-      cond parseFiller(p)
-      next(p, packHandshakeCapabilities1, 2)
-    of packHandshakeCapabilities1:
-      cond parseFixed(p, packet.capabilities1)
-      next(p, packHandshakeCharSet, 1)
-    of packHandshakeCharSet:
-      cond parseFixed(p, packet.charset)
-      next(p, packHandshakeStatus, 2)
-    of packHandshakeStatus:
-      cond parseFixed(p, packet.serverStatus)
-      packet.protocol41 = (packet.capabilities1 and CLIENT_PROTOCOL_41) > 0
-      if packet.protocol41:
-        next(p, packHandshakeCapabilities2, 2)
-      else:
-        next(p, packHandshakeFiller3, 13)
-    of packHandshakeCapabilities2:
-      cond parseFixed(p, packet.capabilities2)
-      packet.capabilities = packet.capabilities1 + 16 * packet.capabilities2
-      next(p, packHandshakeFiller1, 1)
-    of packHandshakeFiller1:
-      cond parseFixed(p, packet.scrambleLen)
-      next(p, packHandshakeFiller2, 10)
-    of packHandshakeFiller2:
-      cond parseFiller(p)
-      # scrambleBuff2 should be 0x00 terminated, but sphinx does not do this
-      # so we assume scrambleBuff2 to be 12 byte and treat the next byte as a
-      # filler byte.
-      next(p, packHandshakeScrambleBuff2, 12)
-    of packHandshakeScrambleBuff2:
-      cond parseFixed(p, packet.scrambleBuff2)
-      packet.scrambleBuff = packet.scrambleBuff1 & packet.scrambleBuff2
-      next(p, packHandshakeFiller3, 1)
-    of packHandshakeFiller3:
-      cond parseFiller(p)
-      if p.isLast and p.wantPayloadLen == 0:
-        next(p, packFinish)
-      else:  
-        next(p, packHandshakePlugin)
-    of packHandshakePlugin:
-      # According to the docs this should be 0x00 terminated, but MariaDB does
-      # not do this, so we assume this string to be packet terminated.
-      cond parseNul(p, packet.plugin)
-      next(p, packFinish)
+      checkPrg parseOnHeader(p)
+    of packHandshake:
+      checkPrg parse(p, packet)
+      p.state = packFinish
     of packFinish:
       packet.sequenceId = p.sequenceId
       return
     else:
-      raise newException(ValueError, "imposible state")
+      raise newException(ValueError, "imposible state " & $p.state)
 
 proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: string) =
   ## Parse the ``buf`` data.
   parse(p, packet, buf.cstring, buf.len)
 
-proc parse*(p: var PacketParser, packet: var GenericPacket, handshakePacket: HandshakePacket, buf: pointer, size: int) = 
+proc parseOk(p: var PacketParser, packet: var EffectPacket, capabilities: int): ProgressState =
+  template nextStatusInfoWithTrack: untyped =
+    packet.okState = eokStatusInfo
+    p.want = 1
+    p.wantEncodedState = lenFlagVal
+  template nextStatusInfoReset: untyped =
+    packet.okState = eokStatusInfo
+    p.want = p.wantPayloadLen
+  while true:
+    case packet.okState
+    of eokAffectedRows:
+      checkIfOk parseLenEncoded(p, packet.affectedRows)
+      packet.okState = eokLastInsertId
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
+    of eokLastInsertId:
+      checkIfOk parseLenEncoded(p, packet.lastInsertId)
+      if (capabilities and CLIENT_PROTOCOL_41) > 0 or 
+         (capabilities and CLIENT_TRANSACTIONS) > 0:
+        packet.okState = eokServerStatus
+        p.want = 2
+      elif (capabilities and CLIENT_SESSION_TRACK) > 0:
+        nextStatusInfoWithTrack
+      else:
+        nextStatusInfoReset
+    of eokServerStatus:
+      checkIfOk parseFixed(p, packet.serverStatus)
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        packet.okState = eokWarningCount
+        p.want = 2
+      elif (capabilities and CLIENT_SESSION_TRACK) > 0:
+        nextStatusInfoWithTrack
+      else:
+        nextStatusInfoReset
+    of eokWarningCount:
+      checkIfOk parseFixed(p, packet.warningCount)
+      if (capabilities and CLIENT_SESSION_TRACK) > 0:
+        nextStatusInfoWithTrack
+      else:
+        nextStatusInfoReset
+    of eokStatusInfo:
+      if (capabilities and CLIENT_SESSION_TRACK) > 0:
+        checkIfOk parseLenEncoded(p, packet.message)
+        packet.okState = eokSessionState
+        p.want = 1
+        p.wantEncodedState = lenFlagVal
+      else:
+        checkIfOk parseFixed(p, packet.message)
+        return prgOk
+    of eokSessionState:
+      checkIfOk parseLenEncoded(p, packet.sessionState)
+      return prgOk
+
+proc parseError(p: var PacketParser, packet: var EffectPacket, capabilities: int): ProgressState =
+  while true:
+    case packet.errState
+    of eerErrorCode:
+      checkIfOk parseFixed(p, packet.errorCode)
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        packet.errState = eerSqlStateMarker
+        p.want = 1
+      else:
+        packet.errState = eerErrorMessage
+        p.want = p.wantPayloadLen
+    of eerSqlStateMarker:
+      checkIfOk parseFixed(p, packet.sqlStateMarker)
+      packet.errState = eerSqlState
+      p.want = 5
+    of eerSqlState:
+      checkIfOk parseFixed(p, packet.sqlState)
+      packet.errState = eerErrorMessage
+      p.want = p.wantPayloadLen
+    of eerErrorMessage:
+      checkIfOk parseFixed(p, packet.errorMessage)
+      return prgOk
+
+proc parse*(p: var PacketParser, packet: var EffectPacket, capabilities: int, buf: pointer, size: int) = 
   mount(p, buf, size)
   while true:
     case p.state
     of packInitialization:
-      next(p, packGenericHeader, 1)
+      p.state = packEffectHeader
+      p.want = 1
       move(p)
     of packHeader:
-      cond parseOnHeader(p)
-    of packGenericHeader:
+      checkPrg parseOnHeader(p)
+    of packEffectHeader:
       var header: int
-      cond parseFixed(p, header)
+      checkPrg parseFixed(p, header)
       case header
       of 0x00:
-        initGenericPacket(packet, genericOk)
-        next(p, packGenericOkAffectedRows, 1, nextLenEncoded)
+        initEffectPacket(packet, effpOk)
+        p.state = packEffectOk
+        p.want = 1
+        p.wantEncodedState = lenFlagVal
       of 0xFF:
-        initGenericPacket(packet, genericError)
-        next(p, packGenericErrorCode, 2)
+        initEffectPacket(packet, effpError)
+        p.state = packEffectError
+        p.want = 2
+        p.wantEncodedState = lenFlagVal
       else:
-        raise newException(ValueError, "invalid header")
-    of packGenericOkAffectedRows:
-      cond parseLenEncoded(p, packet.affectedRows)
-      next(p, packGenericOkLastInsertId, 1, nextLenEncoded)
-    of packGenericOkLastInsertId:
-      cond parseLenEncoded(p, packet.lastInsertId)
-      if (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0 or 
-         (handshakePacket.capabilities and CLIENT_TRANSACTIONS) > 0:
-        next(p, packGenericOkServerStatus, 2)
-      elif (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
-        next(p, packGenericOkStatusInfo, 1, nextLenEncoded)
-      else:
-        next(p, packGenericOkStatusInfo, p.wantPayloadLen)
-    of packGenericOkServerStatus:
-      cond parseFixed(p, packet.serverStatus)
-      if (handshakePacket.capabilities and CLIENT_PROTOCOL_41) > 0:
-        next(p, packGenericOkWarningCount, 2)
-      elif (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
-        next(p, packGenericOkStatusInfo, 1, nextLenEncoded)
-      else:
-        next(p, packGenericOkStatusInfo, p.wantPayloadLen)
-    of packGenericOkWarningCount:
-      cond parseFixed(p, packet.warningCount)
-      if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
-        next(p, packGenericOkStatusInfo, 1, nextLenEncoded)
-      else:
-        next(p, packGenericOkStatusInfo, p.wantPayloadLen)
-    of packGenericOkStatusInfo:
-      if (handshakePacket.capabilities and CLIENT_SESSION_TRACK) > 0:
-        cond parseLenEncoded(p, packet.message)
-        next(p, packGenericOkSessionState, 1, nextLenEncoded) 
-      else:
-        cond parseFixed(p, packet.message)
-        next(p, packFinish)
-    of packGenericOkSessionState:
-      cond parseLenEncoded(p, packet.sessionState)
-      next(p, packFinish)
-    of packGenericErrorCode:
-      cond parseFixed(p, packet.errorCode)
-      if handshakePacket.protocol41:
-        next(p, packGenericErrorSqlStateMarker, 1)
-      else:
-        next(p, packGenericErrorMessage, p.wantPayloadLen)
-    of packGenericErrorSqlStateMarker:
-      cond parseFixed(p, packet.sqlStateMarker)
-      next(p, packGenericErrorSqlState, 5)
-    of packGenericErrorSqlState:
-      cond parseFixed(p, packet.sqlState)
-      next(p, packGenericErrorMessage, p.wantPayloadLen)
-    of packGenericErrorMessage:
-      cond parseFixed(p, packet.errorMessage)
-      next(p, packFinish)
+        raise newException(ValueError, "invalid header " & toProtocolHex(header, 1))
+    of packEffectOk:
+      checkPrg parseOk(p, packet, capabilities)
+      p.state = packFinish
+    of packEffectError:  
+      checkPrg parseError(p, packet, capabilities)
+      p.state = packFinish  
     of packFinish:
       packet.sequenceId = p.sequenceId
       return
     else:
-      raise newException(ValueError, "imposible state")
+      raise newException(ValueError, "imposible state " & $p.state)
 
-proc parse*(p: var PacketParser, packet: var GenericPacket, handshakePacket: HandshakePacket, buf: string) =
+proc parse*(p: var PacketParser, packet: var EffectPacket, capabilities: int, buf: string) =
   ## Parse the ``buf`` data.
-  parse(p, packet, handshakePacket, buf.cstring, buf.len)
+  parse(p, packet, capabilities, buf.cstring, buf.len)
 
-proc parse*(p: var PacketParser, packet: var ResultSetPacket, handshakePacket: HandshakePacket, buf: pointer, size: int) = 
+proc parse(p: var PacketParser, packet: var EofPacket, capabilities: int): ProgressState =
+  while true:
+    case packet.state
+    of eofHeader:
+      var header: int
+      checkIfOk parseFixed(p, header)
+      assert header == 0xFE
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        packet.state = eofWarningCount
+        p.want = 2
+      else:
+        assert p.wantPayloadLen == 0
+        return prgOk
+        # next(p, packResultSetRowDataAll, 9) # TODO next(p, packResultSetRowDataAll, encoded)
+        # move(p)
+    of eofWarningCount:
+      checkIfOk parseFixed(p, packet.warningCount)
+      packet.state = eofServerStatus
+      p.want = 2
+    of eofServerStatus:
+      checkIfOk parseFixed(p, packet.serverStatus)
+      assert p.wantPayloadLen == 0
+      return prgOk
+      # next(p, packResultSetRowDataAll, 9) # TODO next(p, packResultSetRowDataAll, encoded)
+      # move(p)
+
+proc parse(p: var PacketParser, packet: var ResultSetHeaderPacket): ProgressState =
+  while true:
+    case packet.state
+    of rhdColumnCount:
+      checkIfOk parseLenEncoded(p, packet.columnCount)
+      assert p.wantPayloadLen == 0
+      return prgOk
+      # next(p, packResultSetCatalog, 1, nextLenEncoded)
+      # move(p)
+    of rhdExtra:
+      discard # TODO
+
+proc parse(p: var PacketParser, packet: var ResultSetColumnPacket): ProgressState =
+  while true:
+    case packet.state
+    of rcolCatalog:
+      checkIfOk parseLenEncoded(p, packet.catalog)
+      packet.state = rcolSchema
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
+    of rcolSchema:
+      checkIfOk parseLenEncoded(p, packet.schema)
+      packet.state = rcolTable
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
+    of rcolTable:
+      checkIfOk parseLenEncoded(p, packet.table)
+      packet.state = rcolOrgTable
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
+    of rcolOrgTable:
+      checkIfOk parseLenEncoded(p, packet.orgTable)
+      packet.state = rcolName
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
+    of rcolName:
+      checkIfOk parseLenEncoded(p, packet.name)
+      packet.state = rcolOrgName
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
+    of rcolOrgName:
+      checkIfOk parseLenEncoded(p, packet.orgName)
+      packet.state = rcolFiller1
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
+    of rcolFiller1:
+      var fieldsLen: int
+      checkIfOk parseLenEncoded(p, fieldsLen)
+      assert fieldsLen == 0x0c
+      packet.state = rcolCharset
+      p.want = 2
+    of rcolCharset:
+      checkIfOk parseFixed(p, packet.charset)
+      packet.state = rcolColumnLen
+      p.want = 4
+    of rcolColumnLen:
+      checkIfOk parseFixed(p, packet.columnLen)  
+      packet.state = rcolColumnType
+      p.want = 1
+    of rcolColumnType:
+      checkIfOk parseFixed(p, packet.columnType)
+      packet.state = rcolColumnFlags
+      p.want = 2
+    of rcolColumnFlags:
+      checkIfOk parseFixed(p, packet.columnFlags)
+      packet.state = rcolDecimals
+      p.want = 1
+    of rcolDecimals:
+      checkIfOk parseFixed(p, packet.decimals)
+      packet.state = rcolFiller2
+      p.want = 2
+    of rcolFiller2:
+      checkIfOk parseFiller(p)
+      # if command == COM_FIELD_LIST:
+      #   next(p, rcolDefaultValue, 1, nextLenEncoded)
+      # else:
+      assert p.wantPayloadLen == 0
+      return prgOk
+      # next(p, rcolEof1Header, 1)
+      # move(p)
+      # checkIfOk parseOnEofPacket(p, packet.eofOfColumn, handshakePacket)
+
+      # next(p, rcolRowData)  
+    of rcolDefaultValue:
+      assert p.wantPayloadLen == 0
+      return prgOk
+
+proc parse*(p: var PacketParser, packet: var ResultSetPacket, capabilities: int, buf: pointer, size: int) = 
   mount(p, buf, size)
   while true:
     case p.state
     of packInitialization:
       initResultSetPacket(packet)
-      next(p, packResultSetColumnCount, 1, nextLenEncoded)
+      p.state = packResultSet
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
       move(p)
     of packHeader:
-      cond parseOnHeader(p)
-    of packResultSetColumnCount:
-      cond parseLenEncoded(p, packet.columnCount)
-      next(p, packResultSetCatalog, 1, nextLenEncoded)
-      move(p)
-    of packResultSetCatalog:
-      cond parseLenEncoded(p, packet.catalog)
-      next(p, packResultSetSchema, 1, nextLenEncoded)
-    of packResultSetSchema:
-      cond parseLenEncoded(p, packet.schema)
-      next(p, packResultSetTable, 1, nextLenEncoded)
-    of packResultSetTable:
-      cond parseLenEncoded(p, packet.table)
-      next(p, packResultSetOrgTable, 1, nextLenEncoded)
-    of packResultSetOrgTable:
-      cond parseLenEncoded(p, packet.orgTable)
-      next(p, packResultSetName, 1, nextLenEncoded)
-    of packResultSetName:
-      cond parseLenEncoded(p, packet.name)
-      next(p, packResultSetOrgName, 1, nextLenEncoded)
-    of packResultSetOrgName:
-      cond parseLenEncoded(p, packet.orgName)
-      next(p, packResultSetFiller1, 1, nextLenEncoded)
-    of packResultSetFiller1:
-      var fieldsLen: int
-      cond parseLenEncoded(p, fieldsLen)
-      assert fieldsLen == 0x0c
-      next(p, packResultSetCharset, 2)
-    of packResultSetCharset:
-      cond parseFixed(p, packet.charset)
-      next(p, packResultSetColumnLen, 4)
-    of packResultSetColumnLen:
-      cond parseFixed(p, packet.columnLen)
-      next(p, packResultSetColumnType, 1)
-    of packResultSetColumnType:
-      cond parseFixed(p, packet.columnType)
-      next(p, packResultSetColumnFlags, 2)
-    of packResultSetColumnFlags:
-      cond parseFixed(p, packet.columnFlags)
-      next(p, packResultSetDecimals, 1)
-    of packResultSetDecimals:
-      cond parseFixed(p, packet.decimals)
-      next(p, packResultSetFiller2, 2)
-    of packResultSetFiller2:
-      cond parseFiller(p)
-      # if command == COM_FIELD_LIST:
-      #   next(p, packResultSetDefaultValue, 1, nextLenEncoded)
-      # else:
-      next(p, packResultSetEof1Header, 1)
-      move(p)
-      # cond parseOnEofPacket(p, packet.eofOfColumn, handshakePacket)
-
-      # next(p, packResultSetRowData)
-    of packResultSetEof1Header:
-      var header: int
-      cond parseFixed(p, header)
-      assert header == 0xFE
-      if handshakePacket.protocol41:
-        next(p, packResultSetEof1WarningCount, 2)
-      else:
-        assert p.wantPayloadLen == 0
-        next(p, packResultSetRowDataAll, 9) # TODO next(p, packResultSetRowDataAll, encoded)
-        move(p)
-    of packResultSetEof1WarningCount:
-      cond parseFixed(p, packet.eofOfColumn.warningCount)
-      next(p, packResultSetEof1ServerStatus, 2)
-    of packResultSetEof1ServerStatus:
-      cond parseFixed(p, packet.eofOfColumn.serverStatus)
-      assert p.wantPayloadLen == 0
-      next(p, packResultSetRowDataAll, 9) # TODO next(p, packResultSetRowDataAll, encoded)
-      move(p)
-    of packResultSetRowDataAll:
-      var s = ""
-      cond parseFixed(p, s)
-      next(p, packResultSetEof2Header, 1)
-      move(p)
-    of packResultSetEof2Header:
-      var header: int
-      cond parseFixed(p, header)
-      assert header == 0xFE
-      if handshakePacket.protocol41:
-        next(p, packResultSetEof2WarningCount, 2)
-      else:
-        next(p, packFinish)
-    of packResultSetEof2WarningCount:
-      cond parseFixed(p, packet.eofOfRow.warningCount)
-      next(p, packResultSetEof2ServerStatus, 2)
-    of packResultSetEof2ServerStatus:
-      cond parseFixed(p, packet.eofOfRow.serverStatus)
-      next(p, packFinish)
+      checkPrg parseOnHeader(p)
+    of packResultSet: 
+      while true:
+        case packet.state
+        of rsetHeader:
+          checkPrg parse(p, packet.header)
+          var column: ResultSetColumnPacket
+          initResultSetColumnPacket(column)
+          packet.columns.add(column)
+          packet.state = rsetColumn
+          p.want = 1
+          p.wantEncodedState = lenFlagVal
+          move(p)
+          break
+        of rsetColumn:
+          checkPrg parse(p, packet.columns[0])
+          packet.state = rsetColumnEof
+          p.want = 1
+          move(p)
+          break
+        of rsetColumnEof:
+          checkPrg parse(p, packet.columnsEof, capabilities)
+          p.state = packFinish
+          break
+        of rsetRow:
+          discard
+        of rsetRowEof:
+          discard
     of packFinish:
       packet.sequenceId = p.sequenceId
       return

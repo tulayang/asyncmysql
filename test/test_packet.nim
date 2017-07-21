@@ -60,22 +60,22 @@ suite "Handshake Authentication With Valid User":
         MysqlPassword))
     waitFor1 sendClientAuthentication()  
 
-  test "recv generic ok packet":
-    proc recvGenericOk() {.async.} =
+  test "recv effect ok packet":
+    proc recvEffectOk() {.async.} =
       var parser = initPacketParser() 
-      var packet: GenericPacket
+      var packet: EffectPacket
       while true:
         var buf = await recv(socket, 32)
         check toProtocolInt(buf[3] & "") == parser.sequenceId + 2
         check toProtocolInt(buf[4] & "") == 0
-        echoHex "  Generic OK Packet: ", buf
-        parse(parser, packet, handshakePacket, buf)
+        echoHex "  Effect OK Packet: ", buf
+        parse(parser, packet, handshakePacket.capabilities, buf)
         if parser.finished:
-          echo "  Generic Ok Packet: ", packet
+          echo "  Effect Ok Packet: ", packet
           echo "  Buffer length: 32, offset: ", parser.offset 
           check parser.sequenceId == 2
           break
-    waitFor1 recvGenericOk()  
+    waitFor1 recvEffectOk()  
 
   close(socket)
 
@@ -114,20 +114,20 @@ suite "Handshake Authentication With Invalid User":
         MysqlPassword))
     waitFor1 sendClientAuthentication()
 
-  test "recv generic error packet":
-    proc recvGenericError() {.async.} =
+  test "recv effect error packet":
+    proc recvEffectError() {.async.} =
       var parser = initPacketParser() 
-      var packet: GenericPacket
+      var packet: EffectPacket
       while true:
         var buf = await recv(socket, 16)
-        echoHex "  Generic Error Packet: ", buf 
-        parse(parser, packet, handshakePacket, buf)
+        echoHex "  Effect Error Packet: ", buf 
+        parse(parser, packet, handshakePacket.capabilities, buf)
         if parser.finished:
-          echo "  Generic Error Packet: ", packet
+          echo "  Effect Error Packet: ", packet
           echo "  Buffer length: 16, offset: ", parser.offset 
           check parser.sequenceId == 2
           break
-    waitFor1 recvGenericError()  
+    waitFor1 recvEffectError()  
 
   close(socket)
 
@@ -161,37 +161,37 @@ suite "Command Queury":
             protocol41: handshakePacket.protocol41), 
         MysqlPassword))
     
-    proc recvGenericOk() {.async.} =
+    proc recvEffectOk() {.async.} =
       var parser = initPacketParser() 
-      var packet: GenericPacket
+      var packet: EffectPacket
       while true:
         var buf = await recv(socket, 1024)
-        parse(parser, packet, handshakePacket, buf)
+        parse(parser, packet, handshakePacket.capabilities, buf)
         if parser.finished:
           check parser.sequenceId == 2
           break
 
     waitFor1 recvHandshakeInitialization()  
     waitFor1 sendClientAuthentication()  
-    waitFor1 recvGenericOk()  
+    waitFor1 recvEffectOk()  
 
   test "ping":
     proc sendComPing() {.async.} =
       await send(socket, formatComPing())
     waitFor1 sendComPing()  
 
-    proc recvGenericOk() {.async.} =
+    proc recvEffectOk() {.async.} =
       var parser = initPacketParser() 
-      var packet: GenericPacket
+      var packet: EffectPacket
       while true:
         var buf = await recv(socket, 32)
-        echoHex "  Generic Ok Packet: ", buf
-        parse(parser, packet, handshakePacket, buf)
+        echoHex "  Effect Ok Packet: ", buf
+        parse(parser, packet, handshakePacket.capabilities, buf)
         if parser.finished:
-          echo "  Generic Ok Packet: ", packet
-          check packet.kind == genericOk
+          echo "  Effect Ok Packet: ", packet
+          check packet.kind == effpOk
           break
-    waitFor1 recvGenericOk()  
+    waitFor1 recvEffectOk()  
 
   test "query `SELECT host, user form user;`":
     proc sendComQuery() {.async.} =
@@ -204,61 +204,61 @@ suite "Command Queury":
       while true:
         var buf = await recv(socket, 1024)
         echoHex "  ResultSet Packet: ", buf
-        parse(parser, packet, handshakePacket, buf.cstring, buf.len)
+        parse(parser, packet, handshakePacket.capabilities, buf.cstring, buf.len)
         if parser.finished:
           echo "  ResultSet Packet: ", packet
-          #check packet.kind == genericOk
+          #check packet.kind == effectOk
           break
     waitFor1 recvResultSet()  
 
-  # test "use {database} with `test` database":
-  #   proc sendComInitDb() {.async.} =
-  #     await send(socket, formatComInitDb("test"))
-  #   waitFor1 sendComInitDb()  
+  test "use {database} with `test` database":
+    proc sendComInitDb() {.async.} =
+      await send(socket, formatComInitDb("test"))
+    waitFor1 sendComInitDb()  
 
-  #   proc recvGenericOk() {.async.} =
-  #     var parser = initPacketParser() 
-  #     var packet: GenericPacket
-  #     while true:
-  #       var buf = await recv(socket, 32)
-  #       echoHex "  Generic Ok Packet: ", buf
-  #       parse(parser, packet, handshakePacket, buf)
-  #       if parser.finished:
-  #         echo "  Generic Ok Packet: ", packet
-  #         check packet.kind == genericOk
-  #         break
-  #   waitFor1 recvGenericOk()  
+    proc recvEffectOk() {.async.} =
+      var parser = initPacketParser() 
+      var packet: EffectPacket
+      while true:
+        var buf = await recv(socket, 32)
+        echoHex "  Effect Ok Packet: ", buf
+        parse(parser, packet, handshakePacket.capabilities, buf)
+        if parser.finished:
+          echo "  Effect Ok Packet: ", packet
+          check packet.kind == effpOk
+          break
+    waitFor1 recvEffectOk()  
 
-  # test "use {database} with `aaa` (non-existent) database":
-  #   proc sendComInitDb() {.async.} =
-  #     await send(socket, formatComInitDb("aaa"))
-  #   waitFor1 sendComInitDb()  
+  test "use {database} with `aaa` (non-existent) database":
+    proc sendComInitDb() {.async.} =
+      await send(socket, formatComInitDb("aaa"))
+    waitFor1 sendComInitDb()  
 
-  #   proc recvGenericError() {.async.} =
-  #     var parser = initPacketParser() 
-  #     var packet: GenericPacket
-  #     while true:
-  #       var buf = await recv(socket, 32)
-  #       echoHex "  Generic Error Packet: ", buf
-  #       parse(parser, packet, handshakePacket, buf)
-  #       if parser.finished:
-  #         echo "  Generic Error Packet: ", packet
-  #         check packet.kind == genericError
-  #         break
-  #   waitFor1 recvGenericError()  
+    proc recvEffectError() {.async.} =
+      var parser = initPacketParser() 
+      var packet: EffectPacket
+      while true:
+        var buf = await recv(socket, 32)
+        echoHex "  Effect Error Packet: ", buf
+        parse(parser, packet, handshakePacket.capabilities, buf)
+        if parser.finished:
+          echo "  Effect Error Packet: ", packet
+          check packet.kind == effpError
+          break
+    waitFor1 recvEffectError()  
 
-  # test "quit":
-  #   proc sendComQuit() {.async.} =
-  #     await send(socket, formatComQuit())
-  #   waitFor1 sendComQuit()  
+  test "quit":
+    proc sendComQuit() {.async.} =
+      await send(socket, formatComQuit())
+    waitFor1 sendComQuit()  
 
-  #   proc recvClosed() {.async.} =
-  #     var parser = initPacketParser() 
-  #     var packet: GenericPacket
-  #     while true:
-  #       var buf = await recv(socket, 1024)
-  #       check buf.len == 0
-  #       break
-  #   waitFor1 recvClosed()  
+    proc recvClosed() {.async.} =
+      var parser = initPacketParser() 
+      var packet: EffectPacket
+      while true:
+        var buf = await recv(socket, 1024)
+        check buf.len == 0
+        break
+    waitFor1 recvClosed()  
 
   close(socket)
