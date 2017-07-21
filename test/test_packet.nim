@@ -63,7 +63,7 @@ suite "Handshake Authentication With Valid User":
         MysqlPassword))
     waitFor1 sendClientAuthentication()  
 
-  test "recv effect ok packet":
+  test "recv result ok packet":
     proc recvResultOk() {.async.} =
       var parser = initPacketParser() 
       var packet: ResultPacket
@@ -117,7 +117,7 @@ suite "Handshake Authentication With Invalid User":
         MysqlPassword))
     waitFor1 sendClientAuthentication()
 
-  test "recv effect error packet":
+  test "recv result error packet":
     proc recvResultError() {.async.} =
       var parser = initPacketParser() 
       var packet: ResultPacket
