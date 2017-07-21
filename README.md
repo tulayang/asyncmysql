@@ -1,6 +1,6 @@
 # AsyncMysql [![Build Status](https://travis-ci.org/tulayang/asyncmysql.svg?branch=master)](https://travis-ci.org/tulayang/asyncmysql)
 
-Currently, the packet parser has been completed. The ``PacketParser`` is an excellent incremental parser which is not limited by the size of the buffer. For example, using a buffer of 3 bytes buffer to request the mysql server:
+Currently, the packet parser has been completed. The ``PacketParser`` is an excellent incremental parser which is not limited by the size of the buffer. For example, using a buffer of 16 bytes buffer to request the mysql server:
 
 ```nim
 var socket = newAsyncSocket(buffered = false) 
@@ -9,14 +9,13 @@ var handshakePacket: HandshakePacket
 proc recvHandshakeInitialization() {.async.} =
   var parser = initPacketParser() 
   while true:
-    var buf = await recv(socket, 1024)
-    parse(parser, handshakePacket, buf)
+    var buf = await socket.recv(16)
+    parser.parse(handshakePacket, buf)
     if parser.finished:
       break
 
 proc sendClientAuthentication() {.async.} =
-  await send(
-    socket, 
+  await socket.send(
     format(
       ClientAuthenticationPacket(
         sequenceId: handshakePacket.sequenceId + 1, 
@@ -33,33 +32,30 @@ proc recvResultOk() {.async.} =
   var parser = initPacketParser() 
   var packet: ResultPacket
   while true:
-    var buf = await recv(socket, 1024)
-    parse(parser, packet, handshakePacket.capabilities, buf)
+    var buf = await socket.recv(16)
+    parser.parse(packet, handshakePacket.capabilities, buf)
     if parser.finished:
-      check parser.sequenceId == 2
       break
 
 proc sendComQuery() {.async.} =
-  await send(socket, formatComQuery("SELECT host, user from user;"))
+  await socket.send(formatComQuery("SELECT host, user from user;"))
 
 proc recvResultSet() {.async.} =
   var parser = initPacketParser() 
   var packet: ResultPacket
   while true:
-    var buf = await recv(socket, 1024)
-    echoHex "  ResultSet Packet: ", buf
-    parse(parser, packet, handshakePacket.capabilities, buf.cstring, buf.len)
+    var buf = await socket.recv(16)
+    parser.parse(packet, handshakePacket.capabilities, buf.cstring, buf.len)
     if parser.finished:
-      echo "  ResultSet Packet: ", packet
-      echo "  Buffer length: 1024, offset: ", parser.offset 
-      check packet.kind == rpkResultSet
       break
 
 proc main() {.async.} =
   await connect(socket, "127.0.0.1", Port(3306))
   await recvHandshakeInitialization()  
-  await sendClientAuthentication()  
-  await recvResultOk()  
+  await sendClientAuthentication() 
+  await recvResultOk()
+  await sendComQuery() 
+  await recvResultSet()  
 
 waitFor main()
 ```
