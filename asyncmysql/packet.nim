@@ -753,14 +753,20 @@ proc parseError(p: var PacketParser, packet: var ResultPacket, capabilities: int
       checkIfOk parseFixed(p, packet.errorMessage)
       return prgOk
 
-proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket): ProgressState =
+proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket,
+                          capabilities: int): ProgressState =
   while true:
     case packet.state
     of colCatalog:
-      checkIfOk parseLenEncoded(p, packet.catalog)
-      packet.state = colSchema
-      p.want = 1
-      p.wantEncodedState = lenFlagVal
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        checkIfOk parseLenEncoded(p, packet.catalog)
+        packet.state = colSchema
+        p.want = 1
+        p.wantEncodedState = lenFlagVal
+      else:
+        packet.state = colTable
+        p.want = 1
+        p.wantEncodedState = lenFlagVal
     of colSchema:
       checkIfOk parseLenEncoded(p, packet.schema)
       packet.state = colTable
@@ -768,9 +774,14 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
       p.wantEncodedState = lenFlagVal
     of colTable:
       checkIfOk parseLenEncoded(p, packet.table)
-      packet.state = colOrgTable
-      p.want = 1
-      p.wantEncodedState = lenFlagVal
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        packet.state = colOrgTable
+        p.want = 1
+        p.wantEncodedState = lenFlagVal
+      else:
+        packet.state = colName
+        p.want = 1
+        p.wantEncodedState = lenFlagVal
     of colOrgTable:
       checkIfOk parseLenEncoded(p, packet.orgTable)
       packet.state = colName
@@ -778,9 +789,13 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
       p.wantEncodedState = lenFlagVal
     of colName:
       checkIfOk parseLenEncoded(p, packet.name)
-      packet.state = colOrgName
-      p.want = 1
-      p.wantEncodedState = lenFlagVal
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        packet.state = colOrgName
+        p.want = 1
+        p.wantEncodedState = lenFlagVal
+      else:
+        packet.state = colColumnLen
+        p.want = 4
     of colOrgName:
       checkIfOk parseLenEncoded(p, packet.orgName)
       packet.state = colFiller1
@@ -799,7 +814,10 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
     of colColumnLen:
       checkIfOk parseFixed(p, packet.columnLen)  
       packet.state = colColumnType
-      p.want = 1
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        p.want = 1
+      else:
+        p.want = 2
     of colColumnType:
       checkIfOk parseFixed(p, packet.columnType)
       packet.state = colColumnFlags
@@ -810,16 +828,23 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
       p.want = 1
     of colDecimals:
       checkIfOk parseFixed(p, packet.decimals)
-      packet.state = colFiller2
-      p.want = 2
+      if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        packet.state = colFiller2
+        p.want = 2
+      else:
+        packet.state = colDefaultValue
+        p.want = p.wantPayloadLen
     of colFiller2:
       checkIfOk parseFiller(p)
       # if command == COM_FIELD_LIST:
       #   next(p, colDefaultValue, 1, nextLenEncoded)
       # else:
-      assert p.wantPayloadLen == 0
-      return prgOk
+      # assert p.wantPayloadLen == 0
+      # return prgOk
+      packet.state = colDefaultValue
+      p.want = p.wantPayloadLen
     of colDefaultValue:
+      checkIfOk parseFixed(p, packet.defaultValue)
       assert p.wantPayloadLen == 0
       return prgOk
 
@@ -840,7 +865,7 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
         packet.rsetState = rsetColumnEof
         p.want = 1
     of rsetColumn:
-      checkIfOk parseResultSetColumn(p, packet.columns[packet.columnsPos])
+      checkIfOk parseResultSetColumn(p, packet.columns[packet.columnsPos], capabilities)
       inc(packet.columnsPos)
       if packet.columnsPos < packet.columnsCount:
         packet.rsetState = rsetColumn
