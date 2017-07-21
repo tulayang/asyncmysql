@@ -678,13 +678,14 @@ proc parseEof2(p: var PacketParser, packet: var EofPacket, capabilities: int): P
       return prgOk
 
 proc parseOk(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
-  template nextStatusInfoWithTrack: untyped =
-    packet.okState = okStatusInfo
-    p.want = 1
-    p.wantEncodedState = lenFlagVal
-  template nextStatusInfoReset: untyped =
-    packet.okState = okStatusInfo
-    p.want = p.wantPayloadLen
+  template checkHowStatusInfo: untyped =
+    if (capabilities and CLIENT_SESSION_TRACK) > 0 and p.wantPayloadLen > 0:
+      packet.okState = okStatusInfo
+      p.want = 1
+      p.wantEncodedState = lenFlagVal
+    else:
+      packet.okState = okStatusInfo
+      p.want = p.wantPayloadLen
   while true:
     case packet.okState
     of okAffectedRows:
@@ -693,50 +694,34 @@ proc parseOk(p: var PacketParser, packet: var ResultPacket, capabilities: int): 
       p.want = 1
       p.wantEncodedState = lenFlagVal
     of okLastInsertId:
-      echo "............", capabilities, " ", capabilities and CLIENT_PROTOCOL_41, " ", capabilities and CLIENT_TRANSACTIONS
       checkIfOk parseLenEncoded(p, packet.lastInsertId)
       if (capabilities and CLIENT_PROTOCOL_41) > 0 or 
          (capabilities and CLIENT_TRANSACTIONS) > 0:
         packet.okState = okServerStatus
         p.want = 2
-      elif (capabilities and CLIENT_SESSION_TRACK) > 0:
-        nextStatusInfoWithTrack
       else:
-        nextStatusInfoReset
+        checkHowStatusInfo
     of okServerStatus:
-      echo "............", okServerStatus
       checkIfOk parseFixed(p, packet.serverStatus)
       if (capabilities and CLIENT_PROTOCOL_41) > 0:
         packet.okState = okWarningCount
         p.want = 2
-      elif (capabilities and CLIENT_SESSION_TRACK) > 0:
-        nextStatusInfoWithTrack
       else:
-        nextStatusInfoReset
+        checkHowStatusInfo
     of okWarningCount:
-      echo "............", okWarningCount
       checkIfOk parseFixed(p, packet.warningCount)
-      if (capabilities and CLIENT_SESSION_TRACK) > 0:
-        nextStatusInfoWithTrack
-      else:
-        nextStatusInfoReset
+      checkHowStatusInfo
     of okStatusInfo:
-      echo "............", okStatusInfo, " ", capabilities and CLIENT_SESSION_TRACK
-      if (capabilities and CLIENT_SESSION_TRACK) > 0:
-        echo "........... checkIfOk parseLenEncoded(p, packet.message)", p.want, " ", p.wantPayloadLen
+      if (capabilities and CLIENT_SESSION_TRACK) > 0 and p.wantPayloadLen > 0:
         checkIfOk parseLenEncoded(p, packet.message)
         packet.okState = okSessionState
         p.want = 1
         p.wantEncodedState = lenFlagVal
       else:
-        echo "........... checkIfOk parseFixed(p, packet.message)", p.want, " ", p.wantPayloadLen
         checkIfOk parseFixed(p, packet.message)
-        echo "........... checkIfOk parseFixed(p, packet.message) finished"
         return prgOk
     of okSessionState:
-      echo "............", okSessionState
       checkIfOk parseLenEncoded(p, packet.sessionState)
-      echo "............ okSessionState finish"
       return prgOk
 
 proc parseError(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
@@ -940,9 +925,7 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
         p.want = p.wantPayloadLen
         # TODO extra
     of packResultOk:
-      echo "..................", packResultOk
       checkPrg parseOk(p, packet, capabilities)
-      echo "..................packResultOk finish"
       p.state = packFinish
     of packResultError:  
       checkPrg parseError(p, packet, capabilities)
@@ -951,7 +934,6 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
       checkPrg parseResultSet(p, packet, capabilities)
       p.state = packFinish  
     of packFinish:
-      echo "...................", packFinish
       packet.sequenceId = p.sequenceId
       return
     else:
