@@ -18,6 +18,7 @@ proc waitFor1(fut: Future[void]) =
       await fut
     except:
       echo "  !!!FutureError: ", getCurrentExceptionMsg() 
+      raise getCurrentException()
   waitFor check()
 
 proc echoHex(messageHeader: string, s: string) =
