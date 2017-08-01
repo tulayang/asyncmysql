@@ -31,56 +31,6 @@ string[NUL]    auth-plugin name
 
 import strutils, securehash, math
 
-const
-  ## Values for the capabilities flag bitmask used by Client/Server Protocol.
-  ## Currently need to fit into 32 bits.
-  ## Each bit represents an optional feature of the protocol.
-  ## Both the client and the server are sending these.
-  ## The intersection of the two determines whast optional parts of the protocol will be used.
-  CLIENT_LONG_PASSWORD* = 1
-  CLIENT_FOUND_ROWS* = 1 shl 1 
-  CLIENT_LONG_FLAG* = 1 shl 2 
-  CLIENT_CONNECT_WITH_DB* = 1 shl 3 
-  CLIENT_NO_SCHEMA* = 1 shl 4 
-  CLIENT_COMPRESS* = 1 shl 5
-  CLIENT_ODBC* = 1 shl 6 
-  CLIENT_LOCAL_FILES* = 1 shl 7 
-  CLIENT_IGNORE_SPACE* = 1 shl 8
-  CLIENT_PROTOCOL_41* = 1 shl 9 
-  CLIENT_INTERACTIVE* = 1 shl 10 
-  CLIENT_SSL* = 1 shl 11
-  CLIENT_IGNORE_SIGPIPE* = 1 shl 12 
-  CLIENT_TRANSACTIONS* = 1 shl 13 
-  CLIENT_RESERVED* = 1 shl 14
-  CLIENT_RESERVED2* = 1 shl 15 
-  CLIENT_MULTI_STATEMENTS* = 1 shl 16 
-  CLIENT_MULTI_RESULTS* = 1 shl 17 
-  CLIENT_PS_MULTI_RESULTS* = 1 shl 18 
-  CLIENT_PLUGIN_AUTH * = 1 shl 19
-  CLIENT_CONNECT_ATTRS* = 1 shl 20 
-  CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA* = 1 shl 21
-  CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS* = 1 shl 22 
-  CLIENT_SESSION_TRACK* = 1 shl 23
-  CLIENT_DEPRECATE_EOF* = 1 shl 24 
-  CLIENT_SSL_VERIFY_SERVER_CERT* = 1 shl 30
-  CLIENT_REMEMBER_OPTIONS* = 1 shl 31
-
-const
-  SERVER_STATUS_IN_TRANS* = 1
-  SERVER_STATUS_AUTOCOMMIT* = 2
-  SERVER_MORE_RESULTS_EXISTS* = 8
-  SERVER_QUERY_NO_GOOD_INDEX_USED* = 16
-  SERVER_QUERY_NO_INDEX_USED* = 32
-  SERVER_STATUS_CURSOR_EXISTS* = 64
-  SERVER_STATUS_LAST_ROW_SENT* = 128
-  SERVER_STATUS_DB_DROPPED* = 256
-  SERVER_STATUS_NO_BACKSLASH_ESCAPES* = 512
-  SERVER_STATUS_METADATA_CHANGED* = 1024
-  SERVER_QUERY_WAS_SLOW* = 2048
-  SERVER_PS_OUT_PARAMS* = 4096
-  SERVER_STATUS_IN_TRANS_READONLY* = 8192
-  SERVER_SESSION_STATE_CHANGED* = 16384
-
 type 
   ServerCommand* = enum
     COM_SLEEP, 
@@ -115,6 +65,276 @@ type
     COM_DAEMON, 
     COM_BINLOG_DUMP_GTID, 
     COM_RESET_CONNECTION, COM_END
+
+const
+  CHARSET_BIG5_CHINESE_CI*                = 1
+  CHARSET_LATIN2_CZECH_CS*                = 2
+  CHARSET_DEC8_SWEDISH_CI*                = 3
+  CHARSET_CP850_GENERAL_CI*               = 4
+  CHARSET_LATIN1_GERMAN1_CI*              = 5
+  CHARSET_HP8_ENGLISH_CI*                 = 6
+  CHARSET_KOI8R_GENERAL_CI*               = 7
+  CHARSET_LATIN1_SWEDISH_CI*              = 8
+  CHARSET_LATIN2_GENERAL_CI*              = 9
+  CHARSET_SWE7_SWEDISH_CI*                = 10
+  CHARSET_ASCII_GENERAL_CI*               = 11
+  CHARSET_UJIS_JAPANESE_CI*               = 12
+  CHARSET_SJIS_JAPANESE_CI*               = 13
+  CHARSET_CP1251_BULGARIAN_CI*            = 14
+  CHARSET_LATIN1_DANISH_CI*               = 15
+  CHARSET_HEBREW_GENERAL_CI*              = 16
+  CHARSET_TIS620_THAI_CI*                 = 18
+  CHARSET_EUCKR_KOREAN_CI*                = 19
+  CHARSET_LATIN7_ESTONIAN_CS*             = 20
+  CHARSET_LATIN2_HUNGARIAN_CI*            = 21
+  CHARSET_KOI8U_GENERAL_CI*               = 22
+  CHARSET_CP1251_UKRAINIAN_CI*            = 23
+  CHARSET_GB2312_CHINESE_CI*              = 24
+  CHARSET_GREEK_GENERAL_CI*               = 25
+  CHARSET_CP1250_GENERAL_CI*              = 26
+  CHARSET_LATIN2_CROATIAN_CI*             = 27
+  CHARSET_GBK_CHINESE_CI*                 = 28
+  CHARSET_CP1257_LITHUANIAN_CI*           = 29
+  CHARSET_LATIN5_TURKISH_CI*              = 30
+  CHARSET_LATIN1_GERMAN2_CI*              = 31
+  CHARSET_ARMSCII8_GENERAL_CI*            = 32
+  CHARSET_UTF8_GENERAL_CI*                = 33
+  CHARSET_CP1250_CZECH_CS*                = 34
+  CHARSET_UCS2_GENERAL_CI*                = 35
+  CHARSET_CP866_GENERAL_CI*               = 36
+  CHARSET_KEYBCS2_GENERAL_CI*             = 37
+  CHARSET_MACCE_GENERAL_CI*               = 38
+  CHARSET_MACROMAN_GENERAL_CI*            = 39
+  CHARSET_CP852_GENERAL_CI*               = 40
+  CHARSET_LATIN7_GENERAL_CI*              = 41
+  CHARSET_LATIN7_GENERAL_CS*              = 42
+  CHARSET_MACCE_BIN*                      = 43
+  CHARSET_CP1250_CROATIAN_CI*             = 44
+  CHARSET_UTF8MB4_GENERAL_CI*             = 45
+  CHARSET_UTF8MB4_BIN*                    = 46
+  CHARSET_LATIN1_BIN*                     = 47
+  CHARSET_LATIN1_GENERAL_CI*              = 48
+  CHARSET_LATIN1_GENERAL_CS*              = 49
+  CHARSET_CP1251_BIN*                     = 50
+  CHARSET_CP1251_GENERAL_CI*              = 51
+  CHARSET_CP1251_GENERAL_CS*              = 52
+  CHARSET_MACROMAN_BIN*                   = 53
+  CHARSET_UTF16_GENERAL_CI*               = 54
+  CHARSET_UTF16_BIN*                      = 55
+  CHARSET_UTF16LE_GENERAL_CI*             = 56
+  CHARSET_CP1256_GENERAL_CI*              = 57
+  CHARSET_CP1257_BIN*                     = 58
+  CHARSET_CP1257_GENERAL_CI*              = 59
+  CHARSET_UTF32_GENERAL_CI*               = 60
+  CHARSET_UTF32_BIN*                      = 61
+  CHARSET_UTF16LE_BIN*                    = 62
+  CHARSET_BINARY*                         = 63
+  CHARSET_ARMSCII8_BIN*                   = 64
+  CHARSET_ASCII_BIN*                      = 65
+  CHARSET_CP1250_BIN*                     = 66
+  CHARSET_CP1256_BIN*                     = 67
+  CHARSET_CP866_BIN*                      = 68
+  CHARSET_DEC8_BIN*                       = 69
+  CHARSET_GREEK_BIN*                      = 70
+  CHARSET_HEBREW_BIN*                     = 71
+  CHARSET_HP8_BIN*                        = 72
+  CHARSET_KEYBCS2_BIN*                    = 73
+  CHARSET_KOI8R_BIN*                      = 74
+  CHARSET_KOI8U_BIN*                      = 75
+  CHARSET_LATIN2_BIN*                     = 77
+  CHARSET_LATIN5_BIN*                     = 78
+  CHARSET_LATIN7_BIN*                     = 79
+  CHARSET_CP850_BIN*                      = 80
+  CHARSET_CP852_BIN*                      = 81
+  CHARSET_SWE7_BIN*                       = 82
+  CHARSET_UTF8_BIN*                       = 83
+  CHARSET_BIG5_BIN*                       = 84
+  CHARSET_EUCKR_BIN*                      = 85
+  CHARSET_GB2312_BIN*                     = 86
+  CHARSET_GBK_BIN*                        = 87
+  CHARSET_SJIS_BIN*                       = 88
+  CHARSET_TIS620_BIN*                     = 89
+  CHARSET_UCS2_BIN*                       = 90
+  CHARSET_UJIS_BIN*                       = 91
+  CHARSET_GEOSTD8_GENERAL_CI*             = 92
+  CHARSET_GEOSTD8_BIN*                    = 93
+  CHARSET_LATIN1_SPANISH_CI*              = 94
+  CHARSET_CP932_JAPANESE_CI*              = 95
+  CHARSET_CP932_BIN*                      = 96
+  CHARSET_EUCJPMS_JAPANESE_CI*            = 97
+  CHARSET_EUCJPMS_BIN*                    = 98
+  CHARSET_CP1250_POLISH_CI*               = 99
+  CHARSET_UTF16_UNICODE_CI*               = 101
+  CHARSET_UTF16_ICELANDIC_CI*             = 102
+  CHARSET_UTF16_LATVIAN_CI*               = 103
+  CHARSET_UTF16_ROMANIAN_CI*              = 104
+  CHARSET_UTF16_SLOVENIAN_CI*             = 105
+  CHARSET_UTF16_POLISH_CI*                = 106
+  CHARSET_UTF16_ESTONIAN_CI*              = 107
+  CHARSET_UTF16_SPANISH_CI*               = 108
+  CHARSET_UTF16_SWEDISH_CI*               = 109
+  CHARSET_UTF16_TURKISH_CI*               = 110
+  CHARSET_UTF16_CZECH_CI*                 = 111
+  CHARSET_UTF16_DANISH_CI*                = 112
+  CHARSET_UTF16_LITHUANIAN_CI*            = 113
+  CHARSET_UTF16_SLOVAK_CI*                = 114
+  CHARSET_UTF16_SPANISH2_CI*              = 115
+  CHARSET_UTF16_ROMAN_CI*                 = 116
+  CHARSET_UTF16_PERSIAN_CI*               = 117
+  CHARSET_UTF16_ESPERANTO_CI*             = 118
+  CHARSET_UTF16_HUNGARIAN_CI*             = 119
+  CHARSET_UTF16_SINHALA_CI*               = 120
+  CHARSET_UTF16_GERMAN2_CI*               = 121
+  CHARSET_UTF16_CROATIAN_MYSQL561_CI*     = 122
+  CHARSET_UTF16_UNICODE_520_CI*           = 123
+  CHARSET_UTF16_VIETNAMESE_CI*            = 124
+  CHARSET_UCS2_UNICODE_CI*                = 128
+  CHARSET_UCS2_ICELANDIC_CI*              = 129
+  CHARSET_UCS2_LATVIAN_CI*                = 130
+  CHARSET_UCS2_ROMANIAN_CI*               = 131
+  CHARSET_UCS2_SLOVENIAN_CI*              = 132
+  CHARSET_UCS2_POLISH_CI*                 = 133
+  CHARSET_UCS2_ESTONIAN_CI*               = 134
+  CHARSET_UCS2_SPANISH_CI*                = 135
+  CHARSET_UCS2_SWEDISH_CI*                = 136
+  CHARSET_UCS2_TURKISH_CI*                = 137
+  CHARSET_UCS2_CZECH_CI*                  = 138
+  CHARSET_UCS2_DANISH_CI*                 = 139
+  CHARSET_UCS2_LITHUANIAN_CI*             = 140
+  CHARSET_UCS2_SLOVAK_CI*                 = 141
+  CHARSET_UCS2_SPANISH2_CI*               = 142
+  CHARSET_UCS2_ROMAN_CI*                  = 143
+  CHARSET_UCS2_PERSIAN_CI*                = 144
+  CHARSET_UCS2_ESPERANTO_CI*              = 145
+  CHARSET_UCS2_HUNGARIAN_CI*              = 146
+  CHARSET_UCS2_SINHALA_CI*                = 147
+  CHARSET_UCS2_GERMAN2_CI*                = 148
+  CHARSET_UCS2_CROATIAN_MYSQL561_CI*      = 149
+  CHARSET_UCS2_UNICODE_520_CI*            = 150
+  CHARSET_UCS2_VIETNAMESE_CI*             = 151
+  CHARSET_UCS2_GENERAL_MYSQL500_CI*       = 159
+  CHARSET_UTF32_UNICODE_CI*               = 160
+  CHARSET_UTF32_ICELANDIC_CI*             = 161
+  CHARSET_UTF32_LATVIAN_CI*               = 162
+  CHARSET_UTF32_ROMANIAN_CI*              = 163
+  CHARSET_UTF32_SLOVENIAN_CI*             = 164
+  CHARSET_UTF32_POLISH_CI*                = 165
+  CHARSET_UTF32_ESTONIAN_CI*              = 166
+  CHARSET_UTF32_SPANISH_CI*               = 167
+  CHARSET_UTF32_SWEDISH_CI*               = 168
+  CHARSET_UTF32_TURKISH_CI*               = 169
+  CHARSET_UTF32_CZECH_CI*                 = 170
+  CHARSET_UTF32_DANISH_CI*                = 171
+  CHARSET_UTF32_LITHUANIAN_CI*            = 172
+  CHARSET_UTF32_SLOVAK_CI*                = 173
+  CHARSET_UTF32_SPANISH2_CI*              = 174
+  CHARSET_UTF32_ROMAN_CI*                 = 175
+  CHARSET_UTF32_PERSIAN_CI*               = 176
+  CHARSET_UTF32_ESPERANTO_CI*             = 177
+  CHARSET_UTF32_HUNGARIAN_CI*             = 178
+  CHARSET_UTF32_SINHALA_CI*               = 179
+  CHARSET_UTF32_GERMAN2_CI*               = 180
+  CHARSET_UTF32_CROATIAN_MYSQL561_CI*     = 181
+  CHARSET_UTF32_UNICODE_520_CI*           = 182
+  CHARSET_UTF32_VIETNAMESE_CI*            = 183
+  CHARSET_UTF8_UNICODE_CI*                = 192
+  CHARSET_UTF8_ICELANDIC_CI*              = 193
+  CHARSET_UTF8_LATVIAN_CI*                = 194
+  CHARSET_UTF8_ROMANIAN_CI*               = 195
+  CHARSET_UTF8_SLOVENIAN_CI*              = 196
+  CHARSET_UTF8_POLISH_CI*                 = 197
+  CHARSET_UTF8_ESTONIAN_CI*               = 198
+  CHARSET_UTF8_SPANISH_CI*                = 199
+  CHARSET_UTF8_SWEDISH_CI*                = 200
+  CHARSET_UTF8_TURKISH_CI*                = 201
+  CHARSET_UTF8_CZECH_CI*                  = 202
+  CHARSET_UTF8_DANISH_CI*                 = 203
+  CHARSET_UTF8_LITHUANIAN_CI*             = 204
+  CHARSET_UTF8_SLOVAK_CI*                 = 205
+  CHARSET_UTF8_SPANISH2_CI*               = 206
+  CHARSET_UTF8_ROMAN_CI*                  = 207
+  CHARSET_UTF8_PERSIAN_CI*                = 208
+  CHARSET_UTF8_ESPERANTO_CI*              = 209
+  CHARSET_UTF8_HUNGARIAN_CI*              = 210
+  CHARSET_UTF8_SINHALA_CI*                = 211
+  CHARSET_UTF8_GERMAN2_CI*                = 212
+  CHARSET_UTF8_CROATIAN_MYSQL561_CI*      = 213
+  CHARSET_UTF8_UNICODE_520_CI*            = 214
+  CHARSET_UTF8_VIETNAMESE_CI*             = 215
+  CHARSET_UTF8_GENERAL_MYSQL500_CI*       = 223
+  CHARSET_UTF8MB4_UNICODE_CI*             = 224
+  CHARSET_UTF8MB4_ICELANDIC_CI*           = 225
+  CHARSET_UTF8MB4_LATVIAN_CI*             = 226
+  CHARSET_UTF8MB4_ROMANIAN_CI*            = 227
+  CHARSET_UTF8MB4_SLOVENIAN_CI*           = 228
+  CHARSET_UTF8MB4_POLISH_CI*              = 229
+  CHARSET_UTF8MB4_ESTONIAN_CI*            = 230
+  CHARSET_UTF8MB4_SPANISH_CI*             = 231
+  CHARSET_UTF8MB4_SWEDISH_CI*             = 232
+  CHARSET_UTF8MB4_TURKISH_CI*             = 233
+  CHARSET_UTF8MB4_CZECH_CI*               = 234
+  CHARSET_UTF8MB4_DANISH_CI*              = 235
+  CHARSET_UTF8MB4_LITHUANIAN_CI*          = 236
+  CHARSET_UTF8MB4_SLOVAK_CI*              = 237
+  CHARSET_UTF8MB4_SPANISH2_CI*            = 238
+  CHARSET_UTF8MB4_ROMAN_CI*               = 239
+  CHARSET_UTF8MB4_PERSIAN_CI*             = 240
+  CHARSET_UTF8MB4_ESPERANTO_CI*           = 241
+  CHARSET_UTF8MB4_HUNGARIAN_CI*           = 242
+  CHARSET_UTF8MB4_SINHALA_CI*             = 243
+  CHARSET_UTF8MB4_GERMAN2_CI*             = 244
+  CHARSET_UTF8MB4_CROATIAN_MYSQL561_CI*   = 245
+  CHARSET_UTF8MB4_UNICODE_520_CI*         = 246
+  CHARSET_UTF8MB4_VIETNAMESE_CI*          = 247
+  CHARSET_UTF8_GENERAL50_CI*              = 253
+
+  ## Values for the capabilities flag bitmask used by Client/Server Protocol.
+  ## Currently need to fit into 32 bits.
+  ## Each bit represents an optional feature of the protocol.
+  ## Both the client and the server are sending these.
+  ## The intersection of the two determines whast optional parts of the protocol will be used.
+  CLIENT_LONG_PASSWORD*                   = 1 shl 0
+  CLIENT_FOUND_ROWS*                      = 1 shl 1 
+  CLIENT_LONG_FLAG*                       = 1 shl 2 
+  CLIENT_CONNECT_WITH_DB*                 = 1 shl 3 
+  CLIENT_NO_SCHEMA*                       = 1 shl 4 
+  CLIENT_COMPRESS*                        = 1 shl 5
+  CLIENT_ODBC*                            = 1 shl 6 
+  CLIENT_LOCAL_FILES*                     = 1 shl 7 
+  CLIENT_IGNORE_SPACE*                    = 1 shl 8
+  CLIENT_PROTOCOL_41*                     = 1 shl 9 
+  CLIENT_INTERACTIVE*                     = 1 shl 10 
+  CLIENT_SSL*                             = 1 shl 11
+  CLIENT_IGNORE_SIGPIPE*                  = 1 shl 12 
+  CLIENT_TRANSACTIONS*                    = 1 shl 13 
+  CLIENT_RESERVED*                        = 1 shl 14
+  CLIENT_RESERVED2*                       = 1 shl 15 
+  CLIENT_MULTI_STATEMENTS*                = 1 shl 16 
+  CLIENT_MULTI_RESULTS*                   = 1 shl 17 
+  CLIENT_PS_MULTI_RESULTS*                = 1 shl 18 
+  CLIENT_PLUGIN_AUTH *                    = 1 shl 19
+  CLIENT_CONNECT_ATTRS*                   = 1 shl 20 
+  CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA*  = 1 shl 21
+  CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS*    = 1 shl 22 
+  CLIENT_SESSION_TRACK*                   = 1 shl 23
+  CLIENT_DEPRECATE_EOF*                   = 1 shl 24 
+  CLIENT_SSL_VERIFY_SERVER_CERT*          = 1 shl 30
+  CLIENT_REMEMBER_OPTIONS*                = 1 shl 31
+
+  SERVER_STATUS_IN_TRANS*                 = 1
+  SERVER_STATUS_AUTOCOMMIT*               = 2
+  SERVER_MORE_RESULTS_EXISTS*             = 8
+  SERVER_QUERY_NO_GOOD_INDEX_USED*        = 16
+  SERVER_QUERY_NO_INDEX_USED*             = 32
+  SERVER_STATUS_CURSOR_EXISTS*            = 64
+  SERVER_STATUS_LAST_ROW_SENT*            = 128
+  SERVER_STATUS_DB_DROPPED*               = 256
+  SERVER_STATUS_NO_BACKSLASH_ESCAPES*     = 512
+  SERVER_STATUS_METADATA_CHANGED*         = 1024
+  SERVER_QUERY_WAS_SLOW*                  = 2048
+  SERVER_PS_OUT_PARAMS*                   = 4096
+  SERVER_STATUS_IN_TRANS_READONLY*        = 8192
+  SERVER_SESSION_STATE_CHANGED*           = 16384
 
 proc toProtocolHex*(x: Natural, len: Positive): string =
   ## For example: `(0xFAFF, 2)` => `"\xFF\xFA"`, `(0xFAFF00, 3)` => `"\x00\xFF\xFA"`. 
@@ -391,7 +611,7 @@ proc checkIfMove(p: var PacketParser): ProgressState =
   if p.bufLen > p.bufPos:
     assert p.wantPayloadLen == 0
     if p.isLast:
-      raise newException(ValueError, "invalid packet")
+      raise newException(ValueError, "bad packet")
     else:
       move(p)
       return prgContinue
@@ -400,7 +620,7 @@ proc checkIfMove(p: var PacketParser): ProgressState =
       return prgBreak
     else: # == 0
       if p.isLast:
-        raise newException(ValueError, "invalid packet")
+        raise newException(ValueError, "bad packet")
       else:
         move(p)
         return prgContinue
@@ -483,12 +703,12 @@ proc parseLenEncoded(p: var PacketParser, field: var int): ProgressState =
       elif value == 0xFE:
         p.want = 8
       else:
-        raise newException(ValueError, "invalid encoded flag")  
+        raise newException(ValueError, "bad encoded flag " & toProtocolHex(value, 1))  
       p.wantEncodedState = lenIntVal
     of lenIntVal:
       return parseFixed(p, field)
     else:
-      raise newException(ValueError, "imposible state")
+      raise newException(ValueError, "unexpected state " & $p.wantEncodedState)
 
 proc parseLenEncoded(p: var PacketParser, field: var string): ProgressState =
   while true:
@@ -510,7 +730,7 @@ proc parseLenEncoded(p: var PacketParser, field: var string): ProgressState =
       elif value == 0xFE:
         p.want = 8
       else:
-        raise newException(ValueError, "invalid encoded flag")  
+        raise newException(ValueError, "bad encoded flag " & toProtocolHex(value, 1))  
       p.wantEncodedState = lenIntVal
     of lenIntVal:
       var value: int
@@ -630,7 +850,7 @@ proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size
       packet.sequenceId = p.sequenceId
       return
     else:
-      raise newException(ValueError, "imposible state " & $p.state)
+      raise newException(ValueError, "unexpected state " & $p.state)
 
 proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: string) =
   ## Parse the ``buf`` data.
@@ -937,7 +1157,7 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
       packet.sequenceId = p.sequenceId
       return
     else:
-      raise newException(ValueError, "imposible state " & $p.state)
+      raise newException(ValueError, "unexpected state " & $p.state)
 
 proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: string) =
   ## Parse the ``buf`` data.
@@ -966,7 +1186,7 @@ proc parseHex(c: char): int =
   of 'A'..'F':
     result = ord(c.toUpperAscii) - ord('A') + 10
   else:
-    raise newException(ValueError, "invalid hex char: " & c)
+    raise newException(ValueError, "unexpected hex char " & c)
 
 proc `xor`(a: string, b: string): string =
   assert a.len == b.len

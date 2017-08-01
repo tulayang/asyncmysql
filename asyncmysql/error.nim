@@ -4,4 +4,8 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import test_packet, test_connection
+type
+  MysqlError* = object of Exception
+
+proc raiseMysqlError*(msg: string) =
+  raise newException(MysqlError, msg)
