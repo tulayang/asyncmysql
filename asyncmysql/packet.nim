@@ -508,55 +508,96 @@ type
       rowsPos: int
       rows*: seq[string]
       rowsEof*: EofPacket
+      hasMoreResults*: bool
       rsetState: ResultSetState
 
-proc initHandshakePacket(packet: var HandshakePacket) =
-  packet.serverVersion = ""
-  packet.scrambleBuff1 = ""
-  packet.scrambleBuff2 = ""
-  packet.plugin = ""
-  packet.state = hssProtocolVersion
+proc initHandshakePacket(): HandshakePacket =
+  result.sequenceId = 0
+  result.protocolVersion = 0
+  result.serverVersion = ""
+  result.threadId = 0
+  result.scrambleBuff1 = ""
+  result.capabilities = 0
+  result.capabilities1 = 0
+  result.charset = 0
+  result.serverStatus = 0
+  result.capabilities2 = 0
+  result.scrambleLen = 0
+  result.scrambleBuff2 = ""
+  result.scrambleBuff = ""
+  result.plugin = ""
+  result.protocol41 = true
+  result.state = hssProtocolVersion
 
-proc initEofPacket(packet: var EofPacket) =
-  packet.state = eofHeader   
+proc initEofPacket(): EofPacket =
+  result.warningCount = 0
+  result.serverStatus = 0
+  result.state = eofHeader   
 
-proc initResultSetColumnPacket(packet: var ResultSetColumnPacket) =
-  packet.catalog = ""
-  packet.schema = ""
-  packet.table = ""
-  packet.orgTable = ""
-  packet.name = ""
-  packet.orgName = ""
-  packet.defaultValue = ""
-  packet.state = colCatalog
+proc initResultSetColumnPacket(): ResultSetColumnPacket =
+  result.catalog = ""
+  result.schema = ""
+  result.table = ""
+  result.orgTable = ""
+  result.name = ""
+  result.orgName = ""
+  result.charset = 0
+  result.columnLen = 0
+  result.columnType = 0
+  result.columnFlags = 0
+  result.decimals = 0
+  result.defaultValue = ""
+  result.state = colCatalog
 
-proc initResultPacket(packet: var ResultPacket, kind: ResultPacketKind) =
-  packet.kind = kind
+proc initResultPacket(kind: ResultPacketKind): ResultPacket =
+  result.kind = kind
   case kind
   of rpkOk:
-    packet.message = ""
-    packet.sessionState = ""
-    packet.okState = okAffectedRows
+    result.affectedRows = 0
+    result.lastInsertId = 0
+    result.serverStatus = 0
+    result.warningCount = 0
+    result.message = ""
+    result.sessionState = ""
+    result.okState = okAffectedRows
   of rpkError:
-    packet.sqlStateMarker = ""
-    packet.sqlState = ""
-    packet.errorMessage = ""
-    packet.errState = errErrorCode
+    result.errorCode = 0
+    result.sqlStateMarker = ""
+    result.sqlState = ""
+    result.errorMessage = ""
+    result.errState = errErrorCode
   of rpkResultSet:
-    packet.extra = ""
-    packet.columns = @[]
-    initEofPacket(packet.columnsEof)
-    packet.rows = @[]
-    initEofPacket(packet.rowsEof)
-    packet.rsetState = rsetColumnHeader
+    result.extra = ""
+    result.columnsCount = 0
+    result.columnsPos = 0
+    result.columns = @[]
+    result.columnsEof = initEofPacket()
+    result.rowsCount = 0
+    result.rowsPos = 0
+    result.rows = @[]
+    result.rowsEof = initEofPacket()
+    result.hasMoreResults = false
+    result.rsetState = rsetColumnHeader
 
 proc initPacketParser*(): PacketParser = 
   ## TODO: opmitize buffer
-  result.state = packInitialization
-  result.wantEncodedState = lenFlagVal
-  result.want = 4  
+  result.buf = nil
+  result.bufLen = 0
+  result.bufPos = 0
+  result.bufRealLen = 0
+  result.packetPos = 0
   result.word = ""
-
+  result.storeWord = nil
+  result.want = 4  
+  result.payloadLen = 0
+  result.sequenceId = 0
+  result.wantPayloadLen = 0
+  result.storeWant = 0
+  #result.isLast = true TODO
+  result.state = packInitialization
+  result.storeState = packInitialization
+  result.wantEncodedState = lenFlagVal
+  
 proc finished*(p: PacketParser): bool =
   result = p.state == packFinish
 
@@ -583,6 +624,7 @@ proc move(p: var PacketParser) =
   p.state = packHeader
   p.want = 4  
   p.word = ""
+  #p.isLast = true TODO
 
 proc parseHeader(p: var PacketParser): ProgressState =
   result = prgOk
@@ -837,7 +879,7 @@ proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size
   while true:
     case p.state
     of packInitialization:
-      initHandshakePacket(packet)
+      packet = initHandshakePacket()
       p.state = packHandshake
       p.want = 1
       move(p)
@@ -1069,8 +1111,7 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
       checkIfOk parseFixed(p, packet.extra)
       if packet.columnsCount > 0:
         for i in 0..<packet.columnsCount:
-          var column: ResultSetColumnPacket
-          initResultSetColumnPacket(column)
+          var column = initResultSetColumnPacket()
           packet.columns.add(column)
         packet.rsetState = rsetColumn
         p.want = 1
@@ -1112,6 +1153,7 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
       p.wantEncodedState = lenFlagVal 
     of rsetRowEof:
       checkIfOk parseEof2(p, packet.rowsEof, capabilities)
+      packet.hasMoreResults = (packet.rowsEof.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
       return prgOk
 
 proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: pointer, size: int) = 
@@ -1129,17 +1171,17 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
       checkPrg parseFixed(p, header)
       case header
       of 0x00:
-        initResultPacket(packet, rpkOk)
+        packet = initResultPacket(rpkOk)
         p.state = packResultOk
         p.want = 1
         p.wantEncodedState = lenFlagVal
       of 0xFF:
-        initResultPacket(packet, rpkError)
+        packet = initResultPacket(rpkError)
         p.state = packResultError
         p.want = 2
         p.wantEncodedState = lenFlagVal
       else:
-        initResultPacket(packet, rpkResultSet)
+        packet = initResultPacket(rpkResultSet)
         packet.columnsCount = header
         p.state = packResultSet
         p.want = p.wantPayloadLen

@@ -4,30 +4,13 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import unittest, asyncmysql, asyncdispatch, asyncnet, strutils
+import unittest, asyncmysql, util, asyncdispatch, asyncnet
 
 const 
   MysqlHost = "127.0.0.1"
   MysqlPort = Port(3306)
   MysqlUser = "mysql"
   MysqlPassword = "123456"
-
-proc waitFor1(fut: Future[void]) =
-  proc check() {.async.} =
-    try:
-      await fut
-    except:
-      echo "  !!!FutureError: ", getCurrentExceptionMsg() 
-      if true:
-        raise getCurrentException()
-      quit(QuitFailure)
-  waitFor check()
-
-proc echoHex(messageHeader: string, s: string) =
-  write(stdout, messageHeader)
-  for c in s:
-    write(stdout, toHex(ord(c), 2), ' ')
-  write(stdout, '\L')
 
 suite "Handshake Authentication With Valid User":
   var socket = newAsyncSocket(buffered = false) 

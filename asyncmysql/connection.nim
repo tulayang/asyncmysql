@@ -23,7 +23,8 @@ const
     CLIENT_RESERVED         or  # DEPRECATED: Old flag for 4.1 protocol.
     CLIENT_RESERVED2        or  # DEPRECATED: Old flag for 4.1 authentication.
     CLIENT_PS_MULTI_RESULTS or  # Multi-results and OUT parameters in PS-protocol.
-    CLIENT_MULTI_RESULTS        # Enable multi-results for COM_QUERY.
+    CLIENT_MULTI_RESULTS    or  # Enable multi-results for COM_QUERY.
+    CLIENT_MULTI_STATEMENTS 
 
 type
   AsyncMysqlConnection* = ref object
@@ -31,6 +32,18 @@ type
     parser: PacketParser
     handshakePacket: HandshakePacket
     buf: array[MysqlBufSize, char]
+    bufPos: int
+    bufLen: int
+
+proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
+  if conn.bufPos == MysqlBufSize:
+    conn.bufPos = 0
+    assert conn.bufLen == 0
+  if conn.bufLen <= 0:
+    assert conn.bufPos < MysqlBufSize
+    conn.bufLen = await recvInto(conn.socket, conn.buf[conn.bufPos].addr, MysqlBufSize - conn.bufPos)
+    if conn.bufLen == 0:
+      raiseMysqlError("peer disconnected unexpectedly")
 
 proc open*(
   domain: Domain = AF_INET, 
@@ -45,13 +58,15 @@ proc open*(
   # Opens a database connection.
   new(result)
   result.socket = newAsyncSocket(domain, SOCK_STREAM, IPPROTO_TCP, false)
+  result.bufPos = 0
+  result.bufLen = 0
   await connect(result.socket, host, port)
   result.parser = initPacketParser()
   while true:
-    var n = await recvInto(result.socket, result.buf[0].addr, MysqlBufSize)
-    if n == 0:
-      raiseMysqlError("peer disconnected unexpectedly")
-    parse(result.parser, result.handshakePacket, result.buf[0].addr, MysqlBufSize)
+    await recv(result)
+    parse(result.parser, result.handshakePacket, result.buf[result.bufPos].addr, MysqlBufSize)
+    inc(result.bufPos, result.parser.offset)
+    dec(result.bufLen, result.parser.offset)
     if result.parser.finished:
       break
   await send(
@@ -59,7 +74,7 @@ proc open*(
     format(
       ClientAuthenticationPacket(
         sequenceId: result.handshakePacket.sequenceId + 1, 
-        capabilities: capabilities, # 521167
+        capabilities: 521167, # 521167
         maxPacketSize: 0,
         charset: int(charset),
         user: user,
@@ -70,10 +85,10 @@ proc open*(
   result.parser = initPacketParser()
   var packet: ResultPacket
   while true:
-    var n = await recvInto(result.socket, result.buf[0].addr, MysqlBufSize)
-    if n == 0:
-      raiseMysqlError("peer disconnected unexpectedly")
-    parse(result.parser, packet, result.handshakePacket.capabilities, result.buf[0].addr, MysqlBufSize)
+    await recv(result)
+    parse(result.parser, packet, result.handshakePacket.capabilities, result.buf[result.bufPos].addr, MysqlBufSize)
+    inc(result.bufPos, result.parser.offset)
+    dec(result.bufLen, result.parser.offset)
     if result.parser.finished:
       break
   if packet.kind == rpkError:
@@ -83,19 +98,49 @@ proc close*(conn: AsyncMysqlConnection) =
   # Closes the database connection ``conn``.
   close(conn.socket)
 
-proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
+# proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
+#   await send(conn.socket, formatComQuery(string(q)))
+#   var parser = initPacketParser() 
+#   while true:
+#     while true:
+#       var buf = newString(1024)
+#       var n = await recvInto(conn.socket, buf.cstring, 1024)
+#       echo repr buf
+#       if n == 0:
+#         raiseMysqlError("peer disconnected unexpectedly")
+#       parse(parser, result, conn.handshakePacket.capabilities, buf.cstring, 1024)
+#       if parser.finished:
+#         break    
+#     if not result.hasMoreResults:
+#       break
+  # var buf2 = newString(1024)
+  # var n2 = await recvInto(conn.socket, buf2.cstring, 1024)
+  # echo ""
+  # echo repr buf2    
+
+proc walk(conn: AsyncMysqlConnection, q: SqlQuery, futStream: FutureStream[ResultPacket]): Future[void] {.async.} =
   await send(conn.socket, formatComQuery(string(q)))
-  var parser = initPacketParser() 
   while true:
-    var n = await recvInto(conn.socket, conn.buf[0].addr, MysqlBufSize)
-    if n == 0:
-      raiseMysqlError("peer disconnected unexpectedly")
-    parse(parser, result, conn.handshakePacket.capabilities, conn.buf[0].addr, MysqlBufSize)
-    if parser.finished:
-      break    
+    conn.parser = initPacketParser() 
+    var packet: ResultPacket
+    while true:
+      await recv(conn)
+      parse(conn.parser, packet, conn.handshakePacket.capabilities, 
+            conn.buf[conn.bufPos].addr, conn.bufLen)
+      inc(conn.bufPos, conn.parser.offset)
+      dec(conn.bufLen, conn.parser.offset)
+      if conn.parser.finished:
+        break    
+    await write(futStream, packet)
+    if not packet.hasMoreResults:
+      break
 
-
-
+proc query*(conn: AsyncMysqlConnection, q: SqlQuery): FutureStream[ResultPacket] =
+  var futStream = newFutureStream[ResultPacket]("query")
+  result = futStream
+  walk(conn, q, futStream).callback = proc () =
+    complete(futStream)
+  
 
 
 
