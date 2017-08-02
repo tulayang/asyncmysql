@@ -508,8 +508,8 @@ type
       rowsPos: int
       rows*: seq[string]
       rowsEof*: EofPacket
-      hasMoreResults*: bool
       rsetState: ResultSetState
+    hasMoreResults*: bool
 
 proc initHandshakePacket(): HandshakePacket =
   result.sequenceId = 0
@@ -576,8 +576,8 @@ proc initResultPacket(kind: ResultPacketKind): ResultPacket =
     result.rowsPos = 0
     result.rows = @[]
     result.rowsEof = initEofPacket()
-    result.hasMoreResults = false
     result.rsetState = rsetColumnHeader
+  result.hasMoreResults = false
 
 proc initPacketParser*(): PacketParser = 
   ## TODO: opmitize buffer

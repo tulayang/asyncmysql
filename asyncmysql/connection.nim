@@ -118,30 +118,51 @@ proc close*(conn: AsyncMysqlConnection) =
   # echo ""
   # echo repr buf2    
 
-proc walk(conn: AsyncMysqlConnection, q: SqlQuery, futStream: FutureStream[ResultPacket]): Future[void] {.async.} =
-  await send(conn.socket, formatComQuery(string(q)))
-  while true:
-    conn.parser = initPacketParser() 
-    var packet: ResultPacket
-    while true:
-      await recv(conn)
-      parse(conn.parser, packet, conn.handshakePacket.capabilities, 
-            conn.buf[conn.bufPos].addr, conn.bufLen)
-      inc(conn.bufPos, conn.parser.offset)
-      dec(conn.bufLen, conn.parser.offset)
-      if conn.parser.finished:
-        break    
-    await write(futStream, packet)
-    if not packet.hasMoreResults:
-      break
+# proc walk(conn: AsyncMysqlConnection, q: SqlQuery, futStream: FutureStream[ResultPacket]): Future[void] {.async.} =
+#   await send(conn.socket, formatComQuery(string(q)))
+#   while true:
+#     conn.parser = initPacketParser() 
+#     var packet: ResultPacket
+#     while true:
+#       await recv(conn)
+#       parse(conn.parser, packet, conn.handshakePacket.capabilities, 
+#             conn.buf[conn.bufPos].addr, conn.bufLen)
+#       inc(conn.bufPos, conn.parser.offset)
+#       dec(conn.bufLen, conn.parser.offset)
+#       if conn.parser.finished:
+#         break    
+#     await write(futStream, packet)
+#     if not packet.hasMoreResults:
+#       break
 
-proc query*(conn: AsyncMysqlConnection, q: SqlQuery): FutureStream[ResultPacket] =
-  var futStream = newFutureStream[ResultPacket]("query")
-  result = futStream
-  walk(conn, q, futStream).callback = proc () =
+# proc query*(conn: AsyncMysqlConnection, q: SqlQuery): FutureStream[ResultPacket] =
+#   var futStream = newFutureStream[ResultPacket]("query")
+#   result = futStream
+#   walk(conn, q, futStream).callback = proc () =
+#     complete(futStream)
+
+proc write*(futStream: FutureStream[ResultPacket], conn: AsyncMysqlConnection): Future[void] {.async.} =
+  conn.parser = initPacketParser() 
+  var packet: ResultPacket
+  while true:
+    await recv(conn)
+    parse(conn.parser, packet, conn.handshakePacket.capabilities, 
+          conn.buf[conn.bufPos].addr, conn.bufLen)
+    inc(conn.bufPos, conn.parser.offset)
+    dec(conn.bufLen, conn.parser.offset)
+    if conn.parser.finished:
+      break    
+  await write(futStream, packet)
+  if not packet.hasMoreResults:
     complete(futStream)
   
-
+proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[FutureStream[ResultPacket]] =
+  var retFuture = newFuture[FutureStream[ResultPacket]]("query")
+  result = retFuture
+  send(conn.socket, formatComQuery(string(q))).callback = proc () =
+    var futStream = newFutureStream[ResultPacket]("query.callback")
+    complete(retFuture, futStream)
+  
 
 
 

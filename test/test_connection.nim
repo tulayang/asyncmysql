@@ -16,43 +16,48 @@ suite "AsyncMysqlConnection":
   test "query multiply":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      var stream = query(conn, sql("""
+      var stream = await query(conn, sql("""
 select host, user from user where user = ?;
 select password from user;
 """, "root"))
-      let (streaming0, packet0) = await await stream
+
+      await write(stream, conn)
+      let (streaming0, packet0) = await read(stream)
       check packet0.kind == rpkResultSet
       echo "  >>> select host, user from user where user = ?;"
       echo "  ", packet0
 
-      let (streaming1, packet1) = await await stream
+      await write(stream, conn)
+      let (streaming1, packet1) = await read(stream)
       check packet1.kind == rpkResultSet
       echo "  >>> select password from user;"
       echo "  ", packet1
 
-      let (streaming2, packet2) = await await stream
-      check streaming2 == false
+      check packet1.hasMoreResults == false
     waitFor1 sendComQuery() 
 
   test "query multiply with bad results":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      var stream = query(conn, sql("""
+      var stream = await query(conn, sql("""
 select 100;
-select password;
+select var;
 select 10;
 """, "root"))
-      let (streaming0, packet0) = await await stream
+      await write(stream, conn)
+      let (streaming0, packet0) = await read(stream)
       check packet0.kind == rpkResultSet
       echo "  >>> select 100;"
       echo "  ", packet0
 
-      let (streaming1, packet1) = await await stream
+      await write(stream, conn)
+      let (streaming1, packet1) = await read(stream)
       check packet1.kind == rpkError
-      echo "  >>> select password from user;"
+      echo "  >>> select var;"
       echo "  ", packet1
 
-      let (streaming2, packet2) = await await stream
-      check streaming2 == false
+      let (streaming2, packet2) = await read(stream)
+      echo packet2
+      # check streaming2 == false
     waitFor1 sendComQuery() 
 
