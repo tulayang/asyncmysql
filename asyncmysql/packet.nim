@@ -1188,6 +1188,7 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
         # TODO extra
     of packResultOk:
       checkPrg parseOk(p, packet, capabilities)
+      packet.hasMoreResults = (packet.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
       p.state = packFinish
     of packResultError:  
       checkPrg parseError(p, packet, capabilities)
