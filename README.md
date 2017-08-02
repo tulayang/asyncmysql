@@ -11,11 +11,19 @@
 ### Query with a single statement:
 
 ```nim
+import asyncmysql, asyncdispatch, net
+
 proc main() {.async.} =
-  var conn = await open(AF_INET, Port(3306), "127.0.0.1", 
-      "root", "password123456", "mysql")
+  var conn = await open(domain = AF_INET, 
+                        port = Port(3306), 
+                        host = "127.0.0.1", 
+                        user = "mysql", 
+                        password = "123456", 
+                        database = "mysql")
   var packet = await queryOne(conn, 
-      sql("select host, user from mysql where user = ?", "root")) 
+      sql("select host, user from user where user = ?", "root")) 
+  echo ">>> select host, user from user where user = root"
+  echo packet
 
 waitFor main()
 ```
@@ -23,33 +31,48 @@ waitFor main()
 ### Query with multiple statements:
 
 ```nim
+import asyncmysql, asyncdispatch, net
+
 proc main() {.async.} =
-  var conn = await open(AF_INET, Port(3306), "127.0.0.1", 
-                        "root", "password123456", "mysql")
-  var stream = await conn.query(sql("""
+  var conn = await open(domain = AF_INET, 
+                        port = Port(3306), 
+                        host = "127.0.0.1", 
+                        user = "mysql", 
+                        password = "123456", 
+                        database = "mysql")
+
+  var stream = await query(conn, sql("""
 start transaction;
 select host, user from user where user = ?;
-insert into test (name) values (?);
+select user from user;
 commit;
-""", "root", "demo"))
+""", "root"))
 
   let packet0 = await read(stream, conn)
-  assert stream.finished = false
+  echo ">>> strart transaction;"
+  echo packet0
+  assert stream.finished == false
   assert packet0.kind == rpkOk
   assert packet0.hasMoreResults == true
 
-  let packet0 = await read(stream, conn)
-  assert stream.finished = false
+  let packet1 = await read(stream, conn)
+  echo ">>> select host, user from user where user = ?;"
+  echo packet1
+  assert stream.finished == false
   assert packet1.kind == rpkResultSet
   assert packet1.hasMoreResults == true
 
-  let packet0 = await read(stream, conn)
-  assert stream.finished = false
-  assert packet2.kind == rpkOk
+  let packet2 = await read(stream, conn)
+  echo ">>> select user from user;"
+  echo packet2
+  assert stream.finished == false
+  assert packet2.kind == rpkResultSet
   assert packet2.hasMoreResults == true
 
-  let packet0 = await read(stream, conn)
-  assert stream.finished = true
+  let packet3 = await read(stream, conn)
+  echo ">>> commit;"
+  echo packet3
+  assert stream.finished == true
   assert packet3.kind == rpkOk
   assert packet3.hasMoreResults == false
 
@@ -60,9 +83,8 @@ waitFor main()
 
 Currently, the packet parser has been completed. The ``PacketParser`` is an excellent incremental parser which is not limited by the size of the buffer. For example, using a buffer of 16 bytes buffer to request the mysql server.
 
-TODO: building connection pools and big-data (query) streaming tools.
-
-
-
+* big data query via streaming oprations
+* connection pool
+* API Documentation
 
 
