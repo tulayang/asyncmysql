@@ -45,6 +45,7 @@ select 100;
 select var;
 select 10;
 """, "root"))
+      
       await write(stream, conn)
       let (streaming0, packet0) = await read(stream)
       check packet0.kind == rpkResultSet
@@ -61,6 +62,17 @@ select 10;
 
       let (streaming2, packet2) = await read(stream)
       check streaming2 == false
+
+    waitFor1 sendComQuery() 
+
+  test "query singly":
+    proc sendComQuery() {.async.} =
+      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var packet = await queryOne(conn, sql("select 100"))
+      check packet.kind == rpkResultSet
+      check packet.hasMoreResults == false
+      echo "  >>> select 100;"
+      echo "  ", packet
 
     waitFor1 sendComQuery() 
 

@@ -163,7 +163,16 @@ proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[FutureStream[Result
     var futStream = newFutureStream[ResultPacket]("query.callback")
     complete(retFuture, futStream)
   
-
+proc queryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
+  await send(conn.socket, formatComQuery(string(q)))
+  var parser = initPacketParser() 
+  while true:
+    await recv(conn)
+    parse(parser, result, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, conn.bufLen)
+    inc(conn.bufPos, conn.parser.offset)
+    dec(conn.bufLen, conn.parser.offset)
+    if parser.finished:
+      break    
 
 
 

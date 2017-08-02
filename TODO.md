@@ -3,7 +3,9 @@
 
 - add default client maxpacketsize       [OK]
 
-- add multiple statement query           [Now]
+- add multiple statement query           [Now 90%]
+
+- add single statement query
 
 - add streaming recv for big resultset
 
