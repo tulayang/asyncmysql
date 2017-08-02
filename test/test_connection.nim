@@ -18,22 +18,23 @@ suite "AsyncMysqlConnection":
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       var stream = await query(conn, sql("""
 select host, user from user where user = ?;
-select password from user;
+select user from user;
 """, "root"))
 
       await write(stream, conn)
       let (streaming0, packet0) = await read(stream)
       check packet0.kind == rpkResultSet
+      check packet0.hasMoreResults == true
       echo "  >>> select host, user from user where user = ?;"
       echo "  ", packet0
 
       await write(stream, conn)
       let (streaming1, packet1) = await read(stream)
       check packet1.kind == rpkResultSet
-      echo "  >>> select password from user;"
+      check packet1.hasMoreResults == false
+      echo "  >>> select user from user;"
       echo "  ", packet1
 
-      check packet1.hasMoreResults == false
     waitFor1 sendComQuery() 
 
   test "query multiply with bad results":
@@ -47,17 +48,19 @@ select 10;
       await write(stream, conn)
       let (streaming0, packet0) = await read(stream)
       check packet0.kind == rpkResultSet
+      check packet0.hasMoreResults == true
       echo "  >>> select 100;"
       echo "  ", packet0
 
       await write(stream, conn)
       let (streaming1, packet1) = await read(stream)
       check packet1.kind == rpkError
+      check packet1.hasMoreResults == false
       echo "  >>> select var;"
       echo "  ", packet1
 
       let (streaming2, packet2) = await read(stream)
-      echo packet2
-      # check streaming2 == false
+      check streaming2 == false
+
     waitFor1 sendComQuery() 
 
