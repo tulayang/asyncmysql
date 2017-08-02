@@ -23,31 +23,31 @@ select user from user;
 commit;
 """, "root"))
 
-      await write(stream, conn)
-      let (streaming0, packet0) = await read(stream)
+      let packet0 = await read(stream, conn)
       echo "  >>> strart transaction;"
       echo "  ", packet0
+      check stream.finished == false
       check packet0.kind == rpkOk
       check packet0.hasMoreResults == true
 
-      await write(stream, conn)
-      let (streaming1, packet1) = await read(stream)
+      let packet1 = await read(stream, conn)
       echo "  >>> select host, user from user where user = ?;"
       echo "  ", packet1
+      check stream.finished == false
       check packet1.kind == rpkResultSet
       check packet1.hasMoreResults == true
 
-      await write(stream, conn)
-      let (streaming2, packet2) = await read(stream)
+      let packet2 = await read(stream, conn)
       echo "  >>> select user from user;"
       echo "  ", packet2
+      check stream.finished == false
       check packet2.kind == rpkResultSet
       check packet2.hasMoreResults == true
 
-      await write(stream, conn)
-      let (streaming3, packet3) = await read(stream)
-      echo "  >>> strart transaction;"
+      let packet3 = await read(stream, conn)
+      echo "  >>> commit;"
       echo "  ", packet3
+      check stream.finished == true
       check packet3.kind == rpkOk
       check packet3.hasMoreResults == false
 
@@ -62,22 +62,19 @@ select var;
 select 10;
 """, "root"))
       
-      await write(stream, conn)
-      let (streaming0, packet0) = await read(stream)
+      let packet0 = await read(stream, conn)
       echo "  >>> select 100;"
       echo "  ", packet0
+      check stream.finished == false
       check packet0.kind == rpkResultSet
       check packet0.hasMoreResults == true
 
-      await write(stream, conn)
-      let (streaming1, packet1) = await read(stream)
+      let packet1 = await read(stream, conn)
       echo "  >>> select var;"
       echo "  ", packet1
+      check stream.finished == true
       check packet1.kind == rpkError
       check packet1.hasMoreResults == false
-
-      let (streaming2, packet2) = await read(stream)
-      check streaming2 == false
 
     waitFor1 sendComQuery() 
 

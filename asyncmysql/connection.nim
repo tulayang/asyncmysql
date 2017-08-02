@@ -35,6 +35,9 @@ type
     bufPos: int
     bufLen: int
 
+  QueryStream* = ref object
+    finished: bool
+
 proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
   if conn.bufPos == MysqlBufSize:
     conn.bufPos = 0
@@ -98,70 +101,35 @@ proc close*(conn: AsyncMysqlConnection) =
   # Closes the database connection ``conn``.
   close(conn.socket)
 
-# proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
-#   await send(conn.socket, formatComQuery(string(q)))
-#   var parser = initPacketParser() 
-#   while true:
-#     while true:
-#       var buf = newString(1024)
-#       var n = await recvInto(conn.socket, buf.cstring, 1024)
-#       echo repr buf
-#       if n == 0:
-#         raiseMysqlError("peer disconnected unexpectedly")
-#       parse(parser, result, conn.handshakePacket.capabilities, buf.cstring, 1024)
-#       if parser.finished:
-#         break    
-#     if not result.hasMoreResults:
-#       break
-  # var buf2 = newString(1024)
-  # var n2 = await recvInto(conn.socket, buf2.cstring, 1024)
-  # echo ""
-  # echo repr buf2    
+proc newQueryStream*(): QueryStream =
+  new(result)
+  result.finished = false
 
-# proc walk(conn: AsyncMysqlConnection, q: SqlQuery, futStream: FutureStream[ResultPacket]): Future[void] {.async.} =
-#   await send(conn.socket, formatComQuery(string(q)))
-#   while true:
-#     conn.parser = initPacketParser() 
-#     var packet: ResultPacket
-#     while true:
-#       await recv(conn)
-#       parse(conn.parser, packet, conn.handshakePacket.capabilities, 
-#             conn.buf[conn.bufPos].addr, conn.bufLen)
-#       inc(conn.bufPos, conn.parser.offset)
-#       dec(conn.bufLen, conn.parser.offset)
-#       if conn.parser.finished:
-#         break    
-#     await write(futStream, packet)
-#     if not packet.hasMoreResults:
-#       break
+proc read*(stream: QueryStream, conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
+  if stream.finished:
+    return
+  else:
+    conn.parser = initPacketParser() 
+    while true:
+      await recv(conn)
+      parse(conn.parser, result, conn.handshakePacket.capabilities, 
+            conn.buf[conn.bufPos].addr, conn.bufLen)
+      inc(conn.bufPos, conn.parser.offset)
+      dec(conn.bufLen, conn.parser.offset)
+      if conn.parser.finished:
+        break 
+    if not result.hasMoreResults:
+      stream.finished = true
 
-# proc query*(conn: AsyncMysqlConnection, q: SqlQuery): FutureStream[ResultPacket] =
-#   var futStream = newFutureStream[ResultPacket]("query")
-#   result = futStream
-#   walk(conn, q, futStream).callback = proc () =
-#     complete(futStream)
-
-proc write*(futStream: FutureStream[ResultPacket], conn: AsyncMysqlConnection): Future[void] {.async.} =
-  conn.parser = initPacketParser() 
-  var packet: ResultPacket
-  while true:
-    await recv(conn)
-    parse(conn.parser, packet, conn.handshakePacket.capabilities, 
-          conn.buf[conn.bufPos].addr, conn.bufLen)
-    inc(conn.bufPos, conn.parser.offset)
-    dec(conn.bufLen, conn.parser.offset)
-    if conn.parser.finished:
-      break    
-  await write(futStream, packet)
-  if not packet.hasMoreResults:
-    complete(futStream)
+proc finished*(stream: QueryStream): bool =
+  result = stream.finished
   
-proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[FutureStream[ResultPacket]] =
-  var retFuture = newFuture[FutureStream[ResultPacket]]("query")
+proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] =
+  var retFuture = newFuture[QueryStream]("query")
   result = retFuture
   send(conn.socket, formatComQuery(string(q))).callback = proc () =
-    var futStream = newFutureStream[ResultPacket]("query.callback")
-    complete(retFuture, futStream)
+    var stream = newQueryStream()
+    complete(retFuture, stream)
   
 proc queryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
   await send(conn.socket, formatComQuery(string(q)))
@@ -173,6 +141,3 @@ proc queryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.
     dec(conn.bufLen, conn.parser.offset)
     if parser.finished:
       break    
-
-
-
