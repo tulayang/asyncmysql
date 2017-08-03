@@ -49,6 +49,51 @@ proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
     if conn.bufLen == 0:
       raiseMysqlError("peer disconnected unexpectedly")
 
+proc handshake(
+  conn: AsyncMysqlConnection, 
+  domain: Domain, 
+  port: Port, 
+  host: string,
+  user: string,
+  password: string,
+  database: string,
+  charset: int,
+  capabilities: int
+): Future[void] {.async.} =
+  await connect(conn.socket, host, port)
+  conn.parser = initPacketParser()
+  while true:
+    await recv(conn)
+    parse(conn.parser, conn.handshakePacket, conn.buf[conn.bufPos].addr, MysqlBufSize)
+    inc(conn.bufPos, conn.parser.offset)
+    dec(conn.bufLen, conn.parser.offset)
+    if conn.parser.finished:
+      break
+  await send(
+    conn.socket, 
+    format(
+      ClientAuthenticationPacket(
+        sequenceId: conn.handshakePacket.sequenceId + 1, 
+        capabilities: 521167, # 521167
+        maxPacketSize: 0,
+        charset: int(charset),
+        user: user,
+        scrambleBuff: conn.handshakePacket.scrambleBuff,
+        database: database,
+        protocol41: conn.handshakePacket.protocol41), 
+    password))
+  conn.parser = initPacketParser()
+  var packet: ResultPacket
+  while true:
+    await recv(conn)
+    parse(conn.parser, packet, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, MysqlBufSize)
+    inc(conn.bufPos, conn.parser.offset)
+    dec(conn.bufLen, conn.parser.offset)
+    if conn.parser.finished:
+      break
+  if packet.kind == rpkError:
+    raiseMysqlError(packet.errorMessage)
+
 proc open*(
   domain: Domain = AF_INET, 
   port = Port(3306), 
@@ -64,39 +109,11 @@ proc open*(
   result.socket = newAsyncSocket(domain, SOCK_STREAM, IPPROTO_TCP, false)
   result.bufPos = 0
   result.bufLen = 0
-  await connect(result.socket, host, port)
-  result.parser = initPacketParser()
-  while true:
-    await recv(result)
-    parse(result.parser, result.handshakePacket, result.buf[result.bufPos].addr, MysqlBufSize)
-    inc(result.bufPos, result.parser.offset)
-    dec(result.bufLen, result.parser.offset)
-    if result.parser.finished:
-      break
-  await send(
-    result.socket, 
-    format(
-      ClientAuthenticationPacket(
-        sequenceId: result.handshakePacket.sequenceId + 1, 
-        capabilities: 521167, # 521167
-        maxPacketSize: 0,
-        charset: int(charset),
-        user: user,
-        scrambleBuff: result.handshakePacket.scrambleBuff,
-        database: database,
-        protocol41: result.handshakePacket.protocol41), 
-    password))
-  result.parser = initPacketParser()
-  var packet: ResultPacket
-  while true:
-    await recv(result)
-    parse(result.parser, packet, result.handshakePacket.capabilities, result.buf[result.bufPos].addr, MysqlBufSize)
-    inc(result.bufPos, result.parser.offset)
-    dec(result.bufLen, result.parser.offset)
-    if result.parser.finished:
-      break
-  if packet.kind == rpkError:
-    raiseMysqlError(packet.errorMessage)
+  try:
+    await handshake(result, domain, port, host, user, password, database, charset, capabilities)
+  except:
+    close(result.socket)
+    raise getCurrentException()
 
 proc close*(conn: AsyncMysqlConnection) =
   # Closes the database connection ``conn``.
@@ -127,12 +144,9 @@ proc read*(stream: QueryStream): Future[ResultPacket] {.async.} =
 proc finished*(stream: QueryStream): bool =
   result = stream.finished
   
-proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] =
-  var retFuture = newFuture[QueryStream]("query")
-  result = retFuture
-  send(conn.socket, formatComQuery(string(q))).callback = proc () =
-    var stream = newQueryStream(conn)
-    complete(retFuture, stream)
+proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.async.} =
+  await send(conn.socket, formatComQuery(string(q)))
+  result = newQueryStream(conn)
   
 proc queryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
   await send(conn.socket, formatComQuery(string(q)))
