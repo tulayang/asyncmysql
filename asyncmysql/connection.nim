@@ -36,6 +36,7 @@ type
     bufLen: int
 
   QueryStream* = ref object
+    conn: AsyncMysqlConnection
     finished: bool
 
 proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
@@ -101,11 +102,13 @@ proc close*(conn: AsyncMysqlConnection) =
   # Closes the database connection ``conn``.
   close(conn.socket)
 
-proc newQueryStream*(): QueryStream =
+proc newQueryStream(conn: AsyncMysqlConnection): QueryStream =
   new(result)
+  result.conn = conn
   result.finished = false
 
-proc read*(stream: QueryStream, conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
+proc read*(stream: QueryStream): Future[ResultPacket] {.async.} =
+  template conn: untyped = stream.conn
   if stream.finished:
     return
   else:
@@ -128,7 +131,7 @@ proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] =
   var retFuture = newFuture[QueryStream]("query")
   result = retFuture
   send(conn.socket, formatComQuery(string(q))).callback = proc () =
-    var stream = newQueryStream()
+    var stream = newQueryStream(conn)
     complete(retFuture, stream)
   
 proc queryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =

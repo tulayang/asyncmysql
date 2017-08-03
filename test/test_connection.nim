@@ -23,28 +23,28 @@ select user from user;
 commit;
 """, "root"))
 
-      let packet0 = await read(stream, conn)
+      let packet0 = await read(stream)
       echo "  >>> strart transaction;"
       echo "  ", packet0
       check stream.finished == false
       check packet0.kind == rpkOk
       check packet0.hasMoreResults == true
 
-      let packet1 = await read(stream, conn)
+      let packet1 = await read(stream)
       echo "  >>> select host, user from user where user = ?;"
       echo "  ", packet1
       check stream.finished == false
       check packet1.kind == rpkResultSet
       check packet1.hasMoreResults == true
 
-      let packet2 = await read(stream, conn)
+      let packet2 = await read(stream)
       echo "  >>> select user from user;"
       echo "  ", packet2
       check stream.finished == false
       check packet2.kind == rpkResultSet
       check packet2.hasMoreResults == true
 
-      let packet3 = await read(stream, conn)
+      let packet3 = await read(stream)
       echo "  >>> commit;"
       echo "  ", packet3
       check stream.finished == true
@@ -62,14 +62,14 @@ select var;
 select 10;
 """, "root"))
       
-      let packet0 = await read(stream, conn)
+      let packet0 = await read(stream)
       echo "  >>> select 100;"
       echo "  ", packet0
       check stream.finished == false
       check packet0.kind == rpkResultSet
       check packet0.hasMoreResults == true
 
-      let packet1 = await read(stream, conn)
+      let packet1 = await read(stream)
       echo "  >>> select var;"
       echo "  ", packet1
       check stream.finished == true
