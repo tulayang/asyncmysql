@@ -74,7 +74,7 @@ proc handshake(
     format(
       ClientAuthenticationPacket(
         sequenceId: conn.handshakePacket.sequenceId + 1, 
-        capabilities: 521167, # 521167
+        capabilities: capabilities, # 521167
         maxPacketSize: 0,
         charset: int(charset),
         user: user,
