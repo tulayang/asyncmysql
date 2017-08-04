@@ -16,7 +16,7 @@ suite "AsyncMysqlConnection":
   test "query multiply":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      var stream = await query(conn, sql("""
+      var stream = await execQuery(conn, sql("""
 start transaction;
 select host, user from user where user = ?;
 select user from user;
@@ -51,12 +51,13 @@ commit;
       check packet3.kind == rpkOk
       check packet3.hasMoreResults == false
 
+      close(conn)
     waitFor1 sendComQuery() 
 
   test "query multiply with bad results":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      var stream = await query(conn, sql("""
+      var stream = await execQuery(conn, sql("""
 select 100;
 select var;
 select 10;
@@ -76,16 +77,54 @@ select 10;
       check packet1.kind == rpkError
       check packet1.hasMoreResults == false
 
+      close(conn)
     waitFor1 sendComQuery() 
 
   test "query singly":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      var packet = await queryOne(conn, sql("select 100"))
+      let packet = await execQueryOne(conn, sql("select 100"))
       echo "  >>> select 100;"
       echo "  ", packet
       check packet.kind == rpkResultSet
       check packet.hasMoreResults == false
-
+      close(conn)
     waitFor1 sendComQuery() 
+
+  test "ping":
+    proc sendComQuery() {.async.} =
+      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let packet = await execPing(conn)
+      echo "  >>> ping;"
+      echo "  ", packet
+      check packet.kind == rpkOk
+      check packet.hasMoreResults == false
+      close(conn)
+    waitFor1 sendComQuery()  
+
+  test "use dbname":
+    proc sendComQuery() {.async.} =
+      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+
+      let packet0 = await execInitDb(conn, "test")
+      echo "  >>> use test;"
+      echo "  ", packet0
+      check packet0.kind == rpkOk
+      check packet0.hasMoreResults == false
+
+      let packet1 = await execQueryOne(conn, sql("select * from user;"))
+      echo "  >>> select * from test;"
+      echo "  ", packet1
+      check packet1.kind == rpkError
+      check packet0.hasMoreResults == false
+
+      close(conn)
+    waitFor1 sendComQuery()   
+
+  test "quit":
+    proc sendComQuery() {.async.} =
+      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      await execQuit(conn)
+      close(conn)
+    waitFor1 sendComQuery()   
 

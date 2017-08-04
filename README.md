@@ -20,7 +20,7 @@ proc main() {.async.} =
                         user = "mysql", 
                         password = "123456", 
                         database = "mysql")
-  var packet = await conn.queryOne(
+  var packet = await conn.execQueryOne(
       sql("select host, user from user where user = ?", "root")) 
   echo ">>> select host, user from user where user = root"
   echo packet
@@ -41,7 +41,7 @@ proc main() {.async.} =
                         password = "123456", 
                         database = "mysql")
 
-  var stream = await conn.query(sql("""
+  var stream = await conn.execQuery(sql("""
 start transaction;
 select host, user from user where user = ?;
 select user from user;

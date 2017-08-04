@@ -4,10 +4,10 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import asyncdispatch, asyncnet, net, packet, error, query
+import asyncdispatch, asyncnet, net, packet, error, query, strutils
 
 const 
-  MysqlBufSize* = 1024 
+  MysqlBufSize* = 4096 
   DefaultClientCharset* = CHARSET_UTF8_GENERAL_CI
   DefaultClientCapabilities* = 
     CLIENT_LONG_PASSWORD    or  # Use the improved version of Old Password Authentication.
@@ -49,6 +49,16 @@ proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
     if conn.bufLen == 0:
       raiseMysqlError("peer disconnected unexpectedly")
 
+proc recvResultPacket(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
+  conn.parser = initPacketParser() 
+  while true:
+    await recv(conn)
+    parse(conn.parser, result, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, conn.bufLen)
+    inc(conn.bufPos, conn.parser.offset)
+    dec(conn.bufLen, conn.parser.offset)
+    if conn.parser.finished:
+      break    
+
 proc handshake(
   conn: AsyncMysqlConnection, 
   domain: Domain, 
@@ -82,15 +92,7 @@ proc handshake(
         database: database,
         protocol41: conn.handshakePacket.protocol41), 
     password))
-  conn.parser = initPacketParser()
-  var packet: ResultPacket
-  while true:
-    await recv(conn)
-    parse(conn.parser, packet, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, MysqlBufSize)
-    inc(conn.bufPos, conn.parser.offset)
-    dec(conn.bufLen, conn.parser.offset)
-    if conn.parser.finished:
-      break
+  var packet = await recvResultPacket(conn)
   if packet.kind == rpkError:
     raiseMysqlError(packet.errorMessage)
 
@@ -104,7 +106,7 @@ proc open*(
   charset = DefaultClientCharset,
   capabilities = DefaultClientCapabilities
 ): Future[AsyncMysqlConnection] {.async.} =
-  # Opens a database connection.
+  # Opens a new database connection.
   new(result)
   result.socket = newAsyncSocket(domain, SOCK_STREAM, IPPROTO_TCP, false)
   result.bufPos = 0
@@ -125,36 +127,39 @@ proc newQueryStream(conn: AsyncMysqlConnection): QueryStream =
   result.finished = false
 
 proc read*(stream: QueryStream): Future[ResultPacket] {.async.} =
+  ## Reads a packet from ``stream`` step by step.
   template conn: untyped = stream.conn
   if stream.finished:
     return
   else:
-    conn.parser = initPacketParser() 
-    while true:
-      await recv(conn)
-      parse(conn.parser, result, conn.handshakePacket.capabilities, 
-            conn.buf[conn.bufPos].addr, conn.bufLen)
-      inc(conn.bufPos, conn.parser.offset)
-      dec(conn.bufLen, conn.parser.offset)
-      if conn.parser.finished:
-        break 
+    result = await recvResultPacket(conn)
     if not result.hasMoreResults:
       stream.finished = true
 
 proc finished*(stream: QueryStream): bool =
   result = stream.finished
   
-proc query*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.async.} =
+proc execQuery*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.async.} =
+  ## Executes the SQL statements. 
   await send(conn.socket, formatComQuery(string(q)))
   result = newQueryStream(conn)
   
-proc queryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
+proc execQueryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
+  ## Executes the SQL statement. ``q`` should be a single statement.
   await send(conn.socket, formatComQuery(string(q)))
-  var parser = initPacketParser() 
-  while true:
-    await recv(conn)
-    parse(parser, result, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, conn.bufLen)
-    inc(conn.bufPos, conn.parser.offset)
-    dec(conn.bufLen, conn.parser.offset)
-    if parser.finished:
-      break    
+  result = await recvResultPacket(conn)    
+
+proc execQuit*(conn: AsyncMysqlConnection): Future[void] {.async.} =
+  ## Notifies the mysql server that the connection is disconnected. Attempting to request
+  ## the server will causes unknown errors.
+  await send(conn.socket, formatComQuit())
+
+proc execInitDb*(conn: AsyncMysqlConnection, dbname: string): Future[ResultPacket] {.async.} =
+  ## Changes the default schema of the connection.
+  await send(conn.socket, formatComInitDb(dbname))
+  result = await recvResultPacket(conn)    
+
+proc execPing*(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
+  ## Checks whether the connection to the server is working. 
+  await send(conn.socket, formatComPing())
+  result = await recvResultPacket(conn)    

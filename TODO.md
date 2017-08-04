@@ -3,14 +3,20 @@
 
 - add default client maxpacketsize       [OK]
 
-- add multiple statement query           [Now 90%]
+- add multiple statement query           [OK]
 
-- add single statement query
+- add single statement query             [OK]
 
 - add streaming recv for big resultset
 
 - add streaming send for big data
 
-- add other cmd query
+- add other cmd query                    [Now]
 
 - find any function needed 
+
+- add ssl connection
+
+- add cluster connection
+
+- add big-data tests

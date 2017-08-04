@@ -765,6 +765,9 @@ proc parseLenEncoded(p: var PacketParser, field: var string): ProgressState =
         p.wantEncodedState = lenStrVal
         p.want = value
         continue
+      elif value == 0xFB: # 0xFB means that this string field is ``NULL``
+        field = nil
+        return prgOk
       elif value == 0xFC:
         p.want = 2
       elif value == 0xFD:
@@ -1140,10 +1143,16 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
       if header == 0xFE and p.payloadLen < 9:
         packet.rsetState = rsetRowEof
         p.want = 1
-        continue
-      packet.rowsCount = header
-      packet.rsetState = rsetRow
-      p.want = header
+      elif header == 0xFB:
+        packet.rowsCount = 0
+        packet.rows.add(nil)
+        inc(packet.rowsPos)
+        p.want = 1
+        p.wantEncodedState = lenFlagVal 
+      else:
+        packet.rowsCount = header
+        packet.rsetState = rsetRow
+        p.want = header
     of rsetRow:
       packet.rows.add("")
       checkIfOk parseFixed(p, packet.rows[packet.rowsPos])
