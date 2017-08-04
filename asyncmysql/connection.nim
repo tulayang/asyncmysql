@@ -178,19 +178,14 @@ proc execQuit*(conn: AsyncMysqlConnection): Future[void] {.async.} =
   ## the mysql server again will causes unknown errors.
   await send(conn.socket, formatComQuit())
 
-proc execInitDb*(conn: AsyncMysqlConnection, database: string): Future[ResultPacket] {.async.} =
-  ## Changes the default schema of the connection. 
-  ##
-  ## Equivalent to ``USE <database>;``
-  await send(conn.socket, formatComInitDb(database))
-  result = await recvResultPacket(conn, COM_INIT_DB)   
-
-proc execFieldList*(conn: AsyncMysqlConnection, table: string, field = ""): Future[ResultPacket] {.async.} =
-  ## Changes the default schema of the connection. 
-  ##
-  ## Equivalent to ``SHOW [FULL] COLUMNS FROM ...;``
-  await send(conn.socket, formatComFieldList(table, field))
-  result = await recvResultPacket(conn, COM_FIELD_LIST)    
+# execQueryOne(conn, sql"SHOW [FULL] FIELDS FROM <database>") instead of 
+#
+# proc execFieldList*(conn: AsyncMysqlConnection, table: string, field = ""): Future[ResultPacket] {.async.} =
+#   ## Changes the default schema of the connection. 
+#   ##
+#   ## Equivalent to ``SHOW [FULL] COLUMNS FROM ...;``
+#   await send(conn.socket, formatComFieldList(table, field))
+#   result = await recvResultPacket(conn, COM_FIELD_LIST) 
 
 proc execPing*(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
   ## Checks whether the connection to the server is working. 

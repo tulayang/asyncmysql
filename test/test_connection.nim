@@ -102,11 +102,11 @@ select 10;
       close(conn)
     waitFor1 sendComQuery()  
 
-  test "use dbname":
+  test "use <database>":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
 
-      let packet0 = await execInitDb(conn, "test")
+      let packet0 = await execQueryOne(conn, sql"use test")
       echo "  >>> use test;"
       echo "  ", packet0
       check packet0.kind == rpkOk
@@ -118,17 +118,6 @@ select 10;
       check packet1.kind == rpkError
       check packet0.hasMoreResults == false
 
-      close(conn)
-    waitFor1 sendComQuery()   
-
-  test "show [full] columns from ...":
-    proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let packet0 = await execFieldList(conn, "user")
-      echo "  >>> show [full] columns from user;"
-      echo "  ", packet0
-      check packet0.kind == rpkResultSet
-      check packet0.hasMoreResults == false
       close(conn)
     waitFor1 sendComQuery()   
 

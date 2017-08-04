@@ -64,7 +64,18 @@ type
     COM_STMT_FETCH, 
     COM_DAEMON, 
     COM_BINLOG_DUMP_GTID, 
-    COM_RESET_CONNECTION, COM_END
+    COM_RESET_CONNECTION, 
+    COM_END
+  
+  ShutDownLevel* = enum
+    SHUTDOWN_DEFAULT  
+    SHUTDOWN_WAIT_CONNECTIONS       ## Wait for existing connections to finish.
+    SHUTDOWN_WAIT_TRANSACTIONS      ## Wait for existing transactons to finish.
+    SHUTDOWN_WAIT_UPDATES           ## Wait for existing updates to finish (=> no partial MyISAM update)
+    SHUTDOWN_WAIT_ALL_BUFFERS       ## Flush InnoDB buffers and other storage engines' buffers.
+    SHUTDOWN_WAIT_CRITICAL_BUFFERS  ## Don't flush InnoDB buffers, flush other storage engines' buffers.
+    KILL_QUERY                      ## Query level of the KILL command.
+    KILL_CONNECTION                 ## Connection level of the KILL command.  
 
 const
   CHARSET_BIG5_CHINESE_CI*                = 1
@@ -1143,7 +1154,7 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
         p.want = 1
       else:
         var column = initResultSetColumnPacket()
-        packet.columns.add(column)
+        add(packet.columns, column)
         packet.rsetState = rsetColumn
         p.want = header
     of rsetColumn:
@@ -1167,16 +1178,16 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
         p.want = 1
       elif header == 0xFB:
         packet.rowsCount = 0
-        packet.rows.add(nil)
+        add(packet.rows, nil)
         inc(packet.rowsPos)
         p.want = 1
         p.wantEncodedState = lenFlagVal 
       else:
+        add(packet.rows, "")
         packet.rowsCount = header
         packet.rsetState = rsetRow
         p.want = header
     of rsetRow:
-      packet.rows.add("")
       checkIfOk parseFixed(p, packet.rows[packet.rowsPos])
       inc(packet.rowsPos)
       packet.rsetState = rsetRowHeader
@@ -1388,6 +1399,31 @@ proc formatComFieldList*(table: string, field = ""): string =
   add(result, '\0')
   if fieldLen > 0:
     add(result, field)
+
+# proc formatComShutdown*(level: ShutDownLevel): string = 
+#   result = newStringOfCap(4 + 1)
+#   add(result, toProtocolHex(1, 3))
+#   add(result, toProtocolHex(0, 1))
+#   add(result, toProtocolHex(COM_SHUTDOWN.int, 1))
+#   let flag =
+#     case level
+#     of SHUTDOWN_DEFAULT:
+#       toProtocolHex(0x00, 1)
+#     of SHUTDOWN_WAIT_CONNECTIONS:
+#       toProtocolHex(0x01, 1)
+#     of SHUTDOWN_WAIT_TRANSACTIONS:
+#       toProtocolHex(0x02, 1)
+#     of SHUTDOWN_WAIT_UPDATES:
+#       toProtocolHex(0x08, 1)
+#     of SHUTDOWN_WAIT_ALL_BUFFERS:
+#       toProtocolHex(0x10, 1)
+#     of SHUTDOWN_WAIT_CRITICAL_BUFFERS:
+#       toProtocolHex(0x11, 1)
+#     of KILL_QUERY:
+#       toProtocolHex(0xFE, 1)
+#     of KILL_CONNECTION:
+#       toProtocolHex(0xFF, 1)
+#   add(result, flag)
 
 proc formatComPing*(): string = 
   formatNoArgsComImpl COM_PING
