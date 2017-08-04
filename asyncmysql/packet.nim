@@ -378,6 +378,9 @@ proc joinNulStr(s: var string, buf: pointer, size: int): tuple[finished: bool, c
       s.add(offsetCharVal(buf, i))
 
 type
+  PacketParserKind* = enum
+    ppkHandshake, ppkCommand
+
   PacketParser* = object ## The packet parser object.
     buf: pointer
     bufLen: int
@@ -395,6 +398,11 @@ type
     state: PacketState
     storeState: PacketState
     wantEncodedState: LenEncodedState
+    case kind: PacketParserKind
+    of ppkHandshake:
+      discard
+    of ppkCommand:
+      command: ServerCommand 
 
   LenEncodedState* = enum ## Parse state for length encoded integer or string.
     lenFlagVal, lenIntVal, lenStrVal
@@ -479,7 +487,7 @@ type
     state: ResultSetColumnState
 
   ResultSetState* = enum
-    rsetColumnHeader, rsetColumn, rsetColumnEof, rsetRowHeader, rsetRow, rsetRowEof
+    rsetExtra, rsetColumnHeader, rsetColumn, rsetColumnEof, rsetRowHeader, rsetRow, rsetRowEof
 
   ResultPacket* = object
     sequenceId*: int           
@@ -576,10 +584,10 @@ proc initResultPacket(kind: ResultPacketKind): ResultPacket =
     result.rowsPos = 0
     result.rows = @[]
     result.rowsEof = initEofPacket()
-    result.rsetState = rsetColumnHeader
+    result.rsetState = rsetExtra
   result.hasMoreResults = false
 
-proc initPacketParser*(): PacketParser = 
+template initPacketParserImpl() = 
   ## TODO: opmitize buffer
   result.buf = nil
   result.bufLen = 0
@@ -597,6 +605,15 @@ proc initPacketParser*(): PacketParser =
   result.state = packInitialization
   result.storeState = packInitialization
   result.wantEncodedState = lenFlagVal
+
+proc initPacketParser*(): PacketParser = 
+  initPacketParserImpl
+  result.kind = ppkHandshake
+
+proc initPacketParser*(command: ServerCommand): PacketParser = 
+  initPacketParserImpl
+  result.kind = ppkCommand
+  result.command = command
   
 proc finished*(p: PacketParser): bool =
   result = p.state == packFinish
@@ -1018,26 +1035,29 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
     case packet.state
     of colCatalog:
       if (capabilities and CLIENT_PROTOCOL_41) > 0:
-        checkIfOk parseLenEncoded(p, packet.catalog)
+        checkIfOk parseFixed(p, packet.catalog)
         packet.state = colSchema
         p.want = 1
         p.wantEncodedState = lenFlagVal
       else:
         packet.state = colTable
-        p.want = 1
-        p.wantEncodedState = lenFlagVal
+        # p.want = 1
+        # p.wantEncodedState = lenFlagVal
     of colSchema:
       checkIfOk parseLenEncoded(p, packet.schema)
       packet.state = colTable
       p.want = 1
       p.wantEncodedState = lenFlagVal
     of colTable:
-      checkIfOk parseLenEncoded(p, packet.table)
+      #checkIfOk parseLenEncoded(p, packet.table)
+      
       if (capabilities and CLIENT_PROTOCOL_41) > 0:
+        checkIfOk parseLenEncoded(p, packet.table)
         packet.state = colOrgTable
         p.want = 1
         p.wantEncodedState = lenFlagVal
       else:
+        checkIfOk parseFixed(p, packet.table)
         packet.state = colName
         p.want = 1
         p.wantEncodedState = lenFlagVal
@@ -1095,48 +1115,50 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
         p.want = p.wantPayloadLen
     of colFiller2:
       checkIfOk parseFiller(p)
-      # if command == COM_FIELD_LIST:
-      #   next(p, colDefaultValue, 1, nextLenEncoded)
-      # else:
-      # assert p.wantPayloadLen == 0
-      # return prgOk
-      packet.state = colDefaultValue
-      p.want = p.wantPayloadLen
+      if p.command == COM_FIELD_LIST: 
+        packet.state = colDefaultValue
+        p.want = 1
+        p.wantEncodedState = lenFlagVal
+      else:
+        assert p.wantPayloadLen == 0
+        return prgOk
     of colDefaultValue:
-      checkIfOk parseFixed(p, packet.defaultValue)
+      checkIfOk parseLenEncoded(p, packet.defaultValue)
       assert p.wantPayloadLen == 0
       return prgOk
 
 proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
   while true:
     case packet.rsetState
-    of rsetColumnHeader:
-      checkIfOk parseFixed(p, packet.extra)
-      if packet.columnsCount > 0:
-        for i in 0..<packet.columnsCount:
-          var column = initResultSetColumnPacket()
-          packet.columns.add(column)
-        packet.rsetState = rsetColumn
-        p.want = 1
-        p.wantEncodedState = lenFlagVal  
-      else:
+    of rsetExtra:
+      if p.want > 0:
+        checkIfOk parseFixed(p, packet.extra)
+      p.want = 1
+      packet.rsetState = rsetColumnHeader
+    of rsetColumnHeader: 
+      var header: int
+      checkIfOk parseFixed(p, header)
+      if header == 0xFE and p.payloadLen < 9:
         packet.rsetState = rsetColumnEof
         p.want = 1
+      else:
+        var column = initResultSetColumnPacket()
+        packet.columns.add(column)
+        packet.rsetState = rsetColumn
+        p.want = header
     of rsetColumn:
       checkIfOk parseResultSetColumn(p, packet.columns[packet.columnsPos], capabilities)
-      inc(packet.columnsPos)
-      if packet.columnsPos < packet.columnsCount:
-        packet.rsetState = rsetColumn
-        p.want = 1
-        p.wantEncodedState = lenFlagVal  
-      else:
-        packet.rsetState = rsetColumnEof
-        p.want = 1
-    of rsetColumnEof:
-      checkIfOk parseEof(p, packet.columnsEof, capabilities)
-      packet.rsetState = rsetRowHeader
+      packet.rsetState = rsetColumnHeader
       p.want = 1
-      p.wantEncodedState = lenFlagVal  
+      inc(packet.columnsPos)
+    of rsetColumnEof:
+      checkIfOk parseEof2(p, packet.columnsEof, capabilities) 
+      if p.command == COM_FIELD_LIST:
+        return prgOk
+      else:
+        packet.rsetState = rsetRowHeader
+        p.want = 1
+        p.wantEncodedState = lenFlagVal 
     of rsetRowHeader: 
       var header: int
       checkIfOk parseFixed(p, header)
@@ -1194,7 +1216,6 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
         packet.columnsCount = header
         p.state = packResultSet
         p.want = p.wantPayloadLen
-        # TODO extra
     of packResultOk:
       checkPrg parseOk(p, packet, capabilities)
       packet.hasMoreResults = (packet.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
@@ -1350,11 +1371,23 @@ template formatRestStrComImpl(cmd: ServerCommand, str: string) =
 proc formatComQuit*(): string = 
   formatNoArgsComImpl COM_QUIT
 
-proc formatComInitDb*(dbname: string): string = 
-  formatRestStrComImpl COM_INIT_DB, dbname
+proc formatComInitDb*(database: string): string = 
+  formatRestStrComImpl COM_INIT_DB, database
 
 proc formatComQuery*(sql: string): string = 
   formatRestStrComImpl COM_QUERY, sql
+
+proc formatComFieldList*(table: string, field = ""): string = 
+  let fieldLen = if field == nil: 0 else: field.len
+  let payloadLen = (table.len + 1 + fieldLen) + 1
+  result = newStringOfCap(4 + payloadLen)
+  add(result, toProtocolHex(payloadLen, 3))
+  add(result, toProtocolHex(0, 1))
+  add(result, toProtocolHex(COM_FIELD_LIST.int, 1))
+  add(result, table)
+  add(result, '\0')
+  if fieldLen > 0:
+    add(result, field)
 
 proc formatComPing*(): string = 
   formatNoArgsComImpl COM_PING

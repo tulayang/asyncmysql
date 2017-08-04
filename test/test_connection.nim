@@ -121,6 +121,17 @@ select 10;
       close(conn)
     waitFor1 sendComQuery()   
 
+  test "show [full] columns from ...":
+    proc sendComQuery() {.async.} =
+      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let packet0 = await execFieldList(conn, "user")
+      echo "  >>> show [full] columns from user;"
+      echo "  ", packet0
+      check packet0.kind == rpkResultSet
+      check packet0.hasMoreResults == false
+      close(conn)
+    waitFor1 sendComQuery()   
+
   test "quit":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")

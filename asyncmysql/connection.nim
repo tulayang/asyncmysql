@@ -39,6 +39,19 @@ type
     conn: AsyncMysqlConnection
     finished: bool
 
+var DEBUG_data = ""
+var DEBUG_index = 0
+proc DEBUG(conn: AsyncMysqlConnection) =
+  for c in conn.bufPos..<conn.bufPos+conn.bufLen:
+    DEBUG_data.add(conn.buf[c].ord.toHex(2))
+    DEBUG_data.add("  ")
+    inc(DEBUG_index)
+    if DEBUG_index == 10:
+      DEBUG_data.add('\L')
+      DEBUG_index = 0
+  writeFile("/home/king/App/app/asyncmysql/test/log", DEBUG_data)  
+  DEBUG_data = ""
+
 proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
   if conn.bufPos == MysqlBufSize:
     conn.bufPos = 0
@@ -46,11 +59,22 @@ proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
   if conn.bufLen <= 0:
     assert conn.bufPos < MysqlBufSize
     conn.bufLen = await recvInto(conn.socket, conn.buf[conn.bufPos].addr, MysqlBufSize - conn.bufPos)
+    #DEBUG(conn)
     if conn.bufLen == 0:
       raiseMysqlError("peer disconnected unexpectedly")
 
 proc recvResultPacket(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
   conn.parser = initPacketParser() 
+  while true:
+    await recv(conn)
+    parse(conn.parser, result, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, conn.bufLen)
+    inc(conn.bufPos, conn.parser.offset)
+    dec(conn.bufLen, conn.parser.offset)
+    if conn.parser.finished:
+      break  
+
+proc recvResultPacket(conn: AsyncMysqlConnection, command: ServerCommand): Future[ResultPacket] {.async.} =
+  conn.parser = initPacketParser(command) 
   while true:
     await recv(conn)
     parse(conn.parser, result, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, conn.bufLen)
@@ -132,7 +156,7 @@ proc read*(stream: QueryStream): Future[ResultPacket] {.async.} =
   if stream.finished:
     return
   else:
-    result = await recvResultPacket(conn)
+    result = await recvResultPacket(conn, COM_QUERY)
     if not result.hasMoreResults:
       stream.finished = true
 
@@ -147,19 +171,29 @@ proc execQuery*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.
 proc execQueryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
   ## Executes the SQL statement. ``q`` should be a single statement.
   await send(conn.socket, formatComQuery(string(q)))
-  result = await recvResultPacket(conn)    
+  result = await recvResultPacket(conn, COM_QUERY)    
 
 proc execQuit*(conn: AsyncMysqlConnection): Future[void] {.async.} =
   ## Notifies the mysql server that the connection is disconnected. Attempting to request
-  ## the server will causes unknown errors.
+  ## the mysql server again will causes unknown errors.
   await send(conn.socket, formatComQuit())
 
-proc execInitDb*(conn: AsyncMysqlConnection, dbname: string): Future[ResultPacket] {.async.} =
-  ## Changes the default schema of the connection.
-  await send(conn.socket, formatComInitDb(dbname))
-  result = await recvResultPacket(conn)    
+proc execInitDb*(conn: AsyncMysqlConnection, database: string): Future[ResultPacket] {.async.} =
+  ## Changes the default schema of the connection. 
+  ##
+  ## Equivalent to ``USE <database>;``
+  await send(conn.socket, formatComInitDb(database))
+  result = await recvResultPacket(conn, COM_INIT_DB)   
+
+proc execFieldList*(conn: AsyncMysqlConnection, table: string, field = ""): Future[ResultPacket] {.async.} =
+  ## Changes the default schema of the connection. 
+  ##
+  ## Equivalent to ``SHOW [FULL] COLUMNS FROM ...;``
+  await send(conn.socket, formatComFieldList(table, field))
+  result = await recvResultPacket(conn, COM_FIELD_LIST)    
 
 proc execPing*(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
   ## Checks whether the connection to the server is working. 
   await send(conn.socket, formatComPing())
-  result = await recvResultPacket(conn)    
+  result = await recvResultPacket(conn, COM_PING)    
+

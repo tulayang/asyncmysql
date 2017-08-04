@@ -148,7 +148,7 @@ suite "Command Queury":
         MysqlPassword))
     
     proc recvResultOk() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(COM_QUERY) 
       var packet: ResultPacket
       while true:
         var buf = await recv(socket, 1024)
@@ -167,7 +167,7 @@ suite "Command Queury":
     waitFor1 sendComPing()  
 
     proc recvResultOk() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(COM_PING) 
       var packet: ResultPacket
       while true:
         var buf = await recv(socket, 32)
@@ -185,7 +185,7 @@ suite "Command Queury":
     waitFor1 sendComQuery()  
 
     proc recvResultSet() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(COM_QUERY) 
       var packet: ResultPacket
       while true:
         var buf = await recv(socket, 1024)
@@ -204,7 +204,7 @@ suite "Command Queury":
     waitFor1 sendComQuery()  
 
     proc recvResultSet() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(COM_QUERY) 
       var packet: ResultPacket
       while true:
         var buf = await recv(socket, 3)
@@ -223,7 +223,7 @@ suite "Command Queury":
     waitFor1 sendComInitDb()  
 
     proc recvResultOk() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(COM_INIT_DB) 
       var packet: ResultPacket
       while true:
         var buf = await recv(socket, 32)
@@ -241,7 +241,7 @@ suite "Command Queury":
     waitFor1 sendComInitDb()  
 
     proc recvResultError() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(COM_INIT_DB) 
       var packet: ResultPacket
       while true:
         var buf = await recv(socket, 32)
@@ -259,7 +259,7 @@ suite "Command Queury":
     waitFor1 sendComQuit()  
 
     proc recvClosed() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(COM_QUIT) 
       var packet: ResultPacket
       while true:
         var buf = await recv(socket, 1024)
