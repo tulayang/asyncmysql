@@ -113,7 +113,7 @@ select 10;
       check packet0.hasMoreResults == false
 
       let packet1 = await execQueryOne(conn, sql("select * from user;"))
-      echo "  >>> select * from test;"
+      echo "  >>> select * from user;"
       echo "  ", packet1
       check packet1.kind == rpkError
       check packet0.hasMoreResults == false
