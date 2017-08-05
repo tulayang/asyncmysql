@@ -2,11 +2,11 @@
 
 ## Features
 
-* an incremental (MySQL protocol) packet parser which is independent from IO tools 
 * single SQL statement in one query
 * multiple SQL statements in one query
 * big data query via streaming oprations (TODO)
 * connection pool (TODO)
+* an incremental (MySQL protocol) packet parser which is independent from IO tools zzzzzz
 
 ### Query with a single statement:
 
@@ -20,6 +20,7 @@ proc main() {.async.} =
                         user = "mysql", 
                         password = "123456", 
                         database = "mysql")
+                        
   var packet = await conn.execQueryOne(
       sql("select host, user from user where user = ?", "root")) 
   echo ">>> select host, user from user where user = root"
