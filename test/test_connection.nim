@@ -121,12 +121,12 @@ select 10;
       close(conn)
     waitFor1 sendComQuery()  
 
-  test "show full columns from <table>":
+  test "show full fields from <table>":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let packet0 = await execQueryOne(conn, sql"show full columns from user;")
-      echo "  >>> show full columns from user;"
-      echo "  ... ", packet0.columns[0], " ..."
+      let packet0 = await execQueryOne(conn, sql"show full fields from user;")
+      echo "  >>> show full fields from user;"
+      echo "  ... ", packet0.fields[0], " ..."
       check packet0.kind == rpkResultSet
       check packet0.hasMoreResults == false
       close(conn)
@@ -137,7 +137,7 @@ select 10;
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       let packet0 = await execChangeUser(conn, "mysql2", MysqlPassword, "mysql", DefaultClientCharset)
       echo "  >>> change user;"
-      echo "  ... ", packet0
+      echo "  ", packet0
       check packet0.kind == rpkOk
       check packet0.hasMoreResults == false
       close(conn)

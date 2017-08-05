@@ -14,7 +14,7 @@ type
     COM_QUIT, 
     COM_INIT_DB, 
     COM_QUERY, 
-    COM_FIELD_LIST,           # Deprecated, show columns sql statement
+    COM_FIELD_LIST,           # Deprecated, show fields sql statement
     COM_CREATE_DB,            # Deprecated, create table sql statement
     COM_DROP_DB,              # Deprecated, drop table sql statement
     COM_REFRESH,              # Deprecated, flush sql statement
@@ -277,11 +277,11 @@ const
   CLIENT_FOUND_ROWS*                      = 1 shl 1 
     ## Send found rows instead of affected rows in EOF_Packet.
   CLIENT_LONG_FLAG*                       = 1 shl 2 
-    ## Get all column flags.
+    ## Get all field flags.
   CLIENT_CONNECT_WITH_DB*                 = 1 shl 3 
     ## Database (schema) name can be specified on connect in Handshake Response Packet.
   CLIENT_NO_SCHEMA*                       = 1 shl 4 
-    ## Don't allow database.table.column.
+    ## Don't allow database.table.field.
   CLIENT_COMPRESS*                        = 1 shl 5
     ## Compression protocol supported. 
   CLIENT_ODBC*                            = 1 shl 6 
@@ -348,7 +348,7 @@ const
   SERVER_STATUS_NO_BACKSLASH_ESCAPES*     = 512
   SERVER_STATUS_METADATA_CHANGED*         = 1024
     ## Sent to the client if after a prepared statement reprepare we discovered 
-    ## that the new statement returns a different number of result set columns.
+    ## that the new statement returns a different number of result set fields.
   SERVER_QUERY_WAS_SLOW*                  = 2048
   SERVER_PS_OUT_PARAMS*                   = 4096
     ## To mark ResultSet containing output parameter values.
@@ -358,6 +358,60 @@ const
   SERVER_SESSION_STATE_CHANGED*           = 16384
     ## This status flag, when on, implies that one of the state information has changed on 
     ## the server because of the execution of the last statement.
+
+  ## Field(cloumn) types. 
+  # Manually extracted from mysql-5.7.9/include/mysql.h.pp
+  # some more info here: http://dev.mysql.com/doc/refman/5.5/en/c-api-prepared-statement-type-codes.html
+  FIELD_TYPE_DECIMAL     = 0x00 ## aka DECIMAL (http://dev.mysql.com/doc/refman/5.0/en/precision-math-decimal-changes.html)
+  FIELD_TYPE_TINY        = 0x01 ## aka TINYINT, 1 byte
+  FIELD_TYPE_SHORT       = 0x02 ## aka SMALLINT, 2 bytes
+  FIELD_TYPE_LONG        = 0x03 ## aka INT, 4 bytes
+  FIELD_TYPE_FLOAT       = 0x04 ## aka FLOAT, 4-8 bytes
+  FIELD_TYPE_DOUBLE      = 0x05 ## aka DOUBLE, 8 bytes
+  FIELD_TYPE_NULL        = 0x06 ## NULL (used for prepared statements, I think)
+  FIELD_TYPE_TIMESTAMP   = 0x07 ## aka TIMESTAMP
+  FIELD_TYPE_LONGLONG    = 0x08 ## aka BIGINT, 8 bytes
+  FIELD_TYPE_INT24       = 0x09 ## aka MEDIUMINT, 3 bytes
+  FIELD_TYPE_DATE        = 0x0a ## aka DATE
+  FIELD_TYPE_TIME        = 0x0b ## aka TIME
+  FIELD_TYPE_DATETIME    = 0x0c ## aka DATETIME
+  FIELD_TYPE_YEAR        = 0x0d ## aka YEAR, 1 byte (don't ask)
+  FIELD_TYPE_NEWDATE     = 0x0e ## aka ?
+  FIELD_TYPE_VARCHAR     = 0x0f ## aka VARCHAR (?)
+  FIELD_TYPE_BIT         = 0x10 ## aka BIT, 1-8 byte
+  FIELD_TYPE_TIMESTAMP2  = 0x11 ## aka TIMESTAMP with fractional seconds
+  FIELD_TYPE_DATETIME2   = 0x12 ## aka DATETIME with fractional seconds
+  FIELD_TYPE_TIME2       = 0x13 ## aka TIME with fractional seconds
+  FIELD_TYPE_JSON        = 0xf5 ## aka JSON
+  FIELD_TYPE_NEWDECIMAL  = 0xf6 ## aka DECIMAL
+  FIELD_TYPE_ENUM        = 0xf7 ## aka ENUM
+  FIELD_TYPE_SET         = 0xf8 ## aka SET
+  FIELD_TYPE_TINY_BLOB   = 0xf9 ## aka TINYBLOB, TINYTEXT
+  FIELD_TYPE_MEDIUM_BLOB = 0xfa ## aka MEDIUMBLOB, MEDIUMTEXT
+  FIELD_TYPE_LONG_BLOB   = 0xfb ## aka LONGBLOG, LONGTEXT
+  FIELD_TYPE_BLOB        = 0xfc ## aka BLOB, TEXT
+  FIELD_TYPE_VAR_STRING  = 0xfd ## aka VARCHAR, VARBINARY
+  FIELD_TYPE_STRING      = 0xfe ## aka CHAR, BINARY
+  FIELD_TYPE_GEOMETRY    = 0xff ## aka GEOMETRY
+
+  ## Field(cloumn) flags.
+  # Manually extracted from mysql-5.5.23/include/mysql_com.h
+  FIELD_FLAG_NOT_NULL_FLAG         = 1      ## Field can't be NULL 
+  FIELD_FLAG_PRI_KEY_FLAG          = 2      ## Field is part of a primary key 
+  FIELD_FLAG_UNIQUE_KEY_FLAG       = 4      ## Field is part of a unique key 
+  FIELD_FLAG_MULTIPLE_KEY_FLAG     = 8      ## Field is part of a key 
+  FIELD_FLAG_BLOB_FLAG             = 16     ## Field is a blob 
+  FIELD_FLAG_UNSIGNED_FLAG         = 32     ## Field is unsigned 
+  FIELD_FLAG_ZEROFILL_FLAG         = 64     ## Field is zerofill 
+  FIELD_FLAG_BINARY_FLAG           = 128    ## Field is binary   
+  # The following are only sent to new clients 
+  FIELD_FLAG_ENUM_FLAG             = 256    ## Field is an enum 
+  FIELD_FLAG_AUTO_INCREMENT_FLAG   = 512    ## Field is a autoincrement field 
+  FIELD_FLAG_TIMESTAMP_FLAG        = 1024   ## Field is a timestamp 
+  FIELD_FLAG_SET_FLAG              = 2048   ## Field is a set 
+  FIELD_FLAG_NO_DEFAULT_VALUE_FLAG = 4096   ## Field doesn't have default value 
+  FIELD_FLAG_ON_UPDATE_NOW_FLAG    = 8192   ## Field is set to NOW on UPDATE 
+  FIELD_FLAG_NUM_FLAG              = 32768  ## Field is num (for clients) 
 
 proc toProtocolHex*(x: Natural, len: Positive): string =
   ## Converts ``x`` to a string in the format of mysql Client/Server Protocol.
@@ -513,14 +567,14 @@ string[NUL]    auth-plugin name
   ErrorState = enum
     errErrorCode, errSqlState, errSqlStateMarker, errErrorMessage
 
-  ResultSetColumnState = enum
+  ResultSetFieldState = enum
     colCatalog,    colSchema,      colTable,       
     colOrgTable,   colName,        colOrgName,
-    colFiller1,    colCharset,     colColumnLen,   
-    colColumnType, colColumnFlags, colDecimals,    
+    colFiller1,    colCharset,     colFieldLen,   
+    colFieldType, colFieldFlags, colDecimals,    
     colFiller2,    colDefaultValue
 
-  ResultSetColumnPacket* = object 
+  ResultSetFieldPacket* = object 
     catalog*: string
     schema*: string
     table*: string
@@ -528,15 +582,15 @@ string[NUL]    auth-plugin name
     name*: string
     orgName*: string
     charset*: int
-    columnLen*: int
-    columnType*: int
-    columnFlags*: int
+    fieldLen*: int
+    fieldType*: int
+    fieldFlags*: int
     decimals*: int
     defaultValue*: string
-    state: ResultSetColumnState
+    state: ResultSetFieldState
 
   ResultSetState = enum
-    rsetExtra, rsetColumnHeader, rsetColumn, rsetColumnEof, rsetRowHeader, rsetRow, rsetRowEof
+    rsetExtra, rsetFieldHeader, rsetField, rsetFieldEof, rsetRowHeader, rsetRow, rsetRowEof
 
   ResultPacket* = object ## The result packet object.
     sequenceId*: int           
@@ -557,10 +611,10 @@ string[NUL]    auth-plugin name
       errState: ErrorState
     of rpkResultSet:
       extra*: string
-      columnsCount*: int
-      columnsPos: int
-      columns*: seq[ResultSetColumnPacket]
-      columnsEof*: EofPacket
+      fieldsCount*: int
+      fieldsPos: int
+      fields*: seq[ResultSetFieldPacket]
+      fieldsEof*: EofPacket
       rowsCount*: int
       rowsPos: int
       rows*: seq[string]
@@ -591,7 +645,7 @@ proc initEofPacket(): EofPacket =
   result.serverStatus = 0
   result.state = eofHeader   
 
-proc initResultSetColumnPacket(): ResultSetColumnPacket =
+proc initResultSetFieldPacket(): ResultSetFieldPacket =
   result.catalog = ""
   result.schema = ""
   result.table = ""
@@ -599,9 +653,9 @@ proc initResultSetColumnPacket(): ResultSetColumnPacket =
   result.name = ""
   result.orgName = ""
   result.charset = 0
-  result.columnLen = 0
-  result.columnType = 0
-  result.columnFlags = 0
+  result.fieldLen = 0
+  result.fieldType = 0
+  result.fieldFlags = 0
   result.decimals = 0
   result.defaultValue = ""
   result.state = colCatalog
@@ -625,10 +679,10 @@ proc initResultPacket(kind: ResultPacketKind): ResultPacket =
     result.errState = errErrorCode
   of rpkResultSet:
     result.extra = ""
-    result.columnsCount = 0
-    result.columnsPos = 0
-    result.columns = @[]
-    result.columnsEof = initEofPacket()
+    result.fieldsCount = 0
+    result.fieldsPos = 0
+    result.fields = @[]
+    result.fieldsEof = initEofPacket()
     result.rowsCount = 0
     result.rowsPos = 0
     result.rows = @[]
@@ -1091,7 +1145,7 @@ proc parseError(p: var PacketParser, packet: var ResultPacket, capabilities: int
       checkIfOk parseFixed(p, packet.errorMessage)
       return prgOk
 
-proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket,
+proc parseResultSetField(p: var PacketParser, packet: var ResultSetFieldPacket,
                           capabilities: int): ProgressState =
   while true:
     case packet.state
@@ -1135,7 +1189,7 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
         p.want = 1
         p.wantEncodedState = lenFlagVal
       else:
-        packet.state = colColumnLen
+        packet.state = colFieldLen
         p.want = 4
     of colOrgName:
       checkIfOk parseLenEncoded(p, packet.orgName)
@@ -1150,21 +1204,21 @@ proc parseResultSetColumn(p: var PacketParser, packet: var ResultSetColumnPacket
       p.want = 2
     of colCharset:
       checkIfOk parseFixed(p, packet.charset)
-      packet.state = colColumnLen
+      packet.state = colFieldLen
       p.want = 4
-    of colColumnLen:
-      checkIfOk parseFixed(p, packet.columnLen)  
-      packet.state = colColumnType
+    of colFieldLen:
+      checkIfOk parseFixed(p, packet.fieldLen)  
+      packet.state = colFieldType
       if (capabilities and CLIENT_PROTOCOL_41) > 0:
         p.want = 1
       else:
         p.want = 2
-    of colColumnType:
-      checkIfOk parseFixed(p, packet.columnType)
-      packet.state = colColumnFlags
+    of colFieldType:
+      checkIfOk parseFixed(p, packet.fieldType)
+      packet.state = colFieldFlags
       p.want = 2
-    of colColumnFlags:
-      checkIfOk parseFixed(p, packet.columnFlags)
+    of colFieldFlags:
+      checkIfOk parseFixed(p, packet.fieldFlags)
       packet.state = colDecimals
       p.want = 1
     of colDecimals:
@@ -1196,25 +1250,25 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
       if p.want > 0:
         checkIfOk parseFixed(p, packet.extra)
       p.want = 1
-      packet.rsetState = rsetColumnHeader
-    of rsetColumnHeader: 
+      packet.rsetState = rsetFieldHeader
+    of rsetFieldHeader: 
       var header: int
       checkIfOk parseFixed(p, header)
       if header == 0xFE and p.payloadLen < 9:
-        packet.rsetState = rsetColumnEof
+        packet.rsetState = rsetFieldEof
         p.want = 1
       else:
-        var column = initResultSetColumnPacket()
-        add(packet.columns, column)
-        packet.rsetState = rsetColumn
+        var field = initResultSetFieldPacket()
+        add(packet.fields, field)
+        packet.rsetState = rsetField
         p.want = header
-    of rsetColumn:
-      checkIfOk parseResultSetColumn(p, packet.columns[packet.columnsPos], capabilities)
-      packet.rsetState = rsetColumnHeader
+    of rsetField:
+      checkIfOk parseResultSetField(p, packet.fields[packet.fieldsPos], capabilities)
+      packet.rsetState = rsetFieldHeader
       p.want = 1
-      inc(packet.columnsPos)
-    of rsetColumnEof:
-      checkIfOk parseEof2(p, packet.columnsEof, capabilities) 
+      inc(packet.fieldsPos)
+    of rsetFieldEof:
+      checkIfOk parseEof2(p, packet.fieldsEof, capabilities) 
       if p.command == COM_FIELD_LIST:
         return prgOk
       else:
@@ -1277,7 +1331,7 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
         p.wantEncodedState = lenFlagVal
       else:
         packet = initResultPacket(rpkResultSet)
-        packet.columnsCount = header
+        packet.fieldsCount = header
         p.state = packResultSet
         p.want = p.wantPayloadLen
     of packResultOk:
