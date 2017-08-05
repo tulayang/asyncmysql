@@ -5,7 +5,7 @@
 #    details about the copyright.
 
 type
-  MysqlError* = object of Exception
+  MysqlError* = object of Exception ## Raised if a mysql operation is in error.
 
 proc raiseMysqlError*(msg: string) =
   raise newException(MysqlError, msg)

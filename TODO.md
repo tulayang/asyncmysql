@@ -11,9 +11,9 @@
 
 - add streaming send for big data
 
-- add other cmd query                    [Now]
+- add other cmd query                    [OK]
 
-- find any function needed 
+- find any function needed               [OK]
 
 - add ssl connection
 

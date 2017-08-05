@@ -4,48 +4,25 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-#[ Handshake Initialization Packet
-3              packet Length 
-1              packet sequenceId
-1              [0a] protocolVersion serverVersion
-string[NUL]    server serverVersion
-4              connection id
-string[8]      scramble buff 1
-1              [00] filler
-2              capability flags (lower 2 bytes)
-1              character set
-2              serverStatus flags
-  if capabilities & CLIENT_PROTOCOL_41 {
-2              capability flags (upper 2 bytes)
-1              scramble payloadLen
-10             reserved (all [00])
-string[12]     scramble buff 2
-1              [00] filler
-  } else {
-13             [00] filler
-  }
-  if more data in the packet {
-string[NUL]    auth-plugin name  
-  }
-]#
-
 import strutils, securehash, math
 
 type 
-  ServerCommand* = enum
+  # [WL#8754: Deprecate COM_XXX commands which are redundant.]
+  # _<https://dev.mysql.com/worklog/task/?id=8754>
+  ServerCommand* = enum ## Commands used by Client/Server Protocol to request mysql oparations. 
     COM_SLEEP, 
     COM_QUIT, 
     COM_INIT_DB, 
     COM_QUERY, 
-    COM_FIELD_LIST, 
-    COM_CREATE_DB, 
-    COM_DROP_DB, 
-    COM_REFRESH, 
+    COM_FIELD_LIST,           # Deprecated, show columns sql statement
+    COM_CREATE_DB,            # Deprecated, create table sql statement
+    COM_DROP_DB,              # Deprecated, drop table sql statement
+    COM_REFRESH,              # Deprecated, flush sql statement
     COM_DEPRECATED_1, 
     COM_STATISTICS, 
-    COM_PROCESS_INFO, 
+    COM_PROCESS_INFO,         # Deprecated, show processlist sql statement
     COM_CONNECT, 
-    COM_PROCESS_KILL, 
+    COM_PROCESS_KILL,         # Deprecated, kill connection/query sql statement
     COM_DEBUG, 
     COM_PING, 
     COM_TIME, 
@@ -67,17 +44,8 @@ type
     COM_RESET_CONNECTION, 
     COM_END
   
-  ShutDownLevel* = enum
-    SHUTDOWN_DEFAULT  
-    SHUTDOWN_WAIT_CONNECTIONS       ## Wait for existing connections to finish.
-    SHUTDOWN_WAIT_TRANSACTIONS      ## Wait for existing transactons to finish.
-    SHUTDOWN_WAIT_UPDATES           ## Wait for existing updates to finish (=> no partial MyISAM update)
-    SHUTDOWN_WAIT_ALL_BUFFERS       ## Flush InnoDB buffers and other storage engines' buffers.
-    SHUTDOWN_WAIT_CRITICAL_BUFFERS  ## Don't flush InnoDB buffers, flush other storage engines' buffers.
-    KILL_QUERY                      ## Query level of the KILL command.
-    KILL_CONNECTION                 ## Connection level of the KILL command.  
-
 const
+  ## Character sets used by mysql.
   CHARSET_BIG5_CHINESE_CI*                = 1
   CHARSET_LATIN2_CZECH_CS*                = 2
   CHARSET_DEC8_SWEDISH_CI*                = 3
@@ -305,49 +273,94 @@ const
   ## Both the client and the server are sending these.
   ## The intersection of the two determines whast optional parts of the protocol will be used.
   CLIENT_LONG_PASSWORD*                   = 1 shl 0
+    ## Use the improved version of Old Password Authentication.
   CLIENT_FOUND_ROWS*                      = 1 shl 1 
+    ## Send found rows instead of affected rows in EOF_Packet.
   CLIENT_LONG_FLAG*                       = 1 shl 2 
+    ## Get all column flags.
   CLIENT_CONNECT_WITH_DB*                 = 1 shl 3 
+    ## Database (schema) name can be specified on connect in Handshake Response Packet.
   CLIENT_NO_SCHEMA*                       = 1 shl 4 
+    ## Don't allow database.table.column.
   CLIENT_COMPRESS*                        = 1 shl 5
+    ## Compression protocol supported. 
   CLIENT_ODBC*                            = 1 shl 6 
+    ## Special handling of ODBC behavior. 
   CLIENT_LOCAL_FILES*                     = 1 shl 7 
+    ## Can use LOAD DATA LOCAL.
   CLIENT_IGNORE_SPACE*                    = 1 shl 8
+    ## Ignore spaces before '('.
   CLIENT_PROTOCOL_41*                     = 1 shl 9 
+    ## New 4.1 protocol.
   CLIENT_INTERACTIVE*                     = 1 shl 10 
+    ## This is an interactive client.
   CLIENT_SSL*                             = 1 shl 11
-  CLIENT_IGNORE_SIGPIPE*                  = 1 shl 12 
+    ## Use SSL encryption for the session.
+  CLIENT_IGNORE_SIGPIPE*                  = 1 shl 12
+    ## Client only flag. 
   CLIENT_TRANSACTIONS*                    = 1 shl 13 
+    ## Client knows about transactions.
   CLIENT_RESERVED*                        = 1 shl 14
+    ## DEPRECATED: Old flag for 4.1 protocol.
   CLIENT_RESERVED2*                       = 1 shl 15 
+    ## DEPRECATED: Old flag for 4.1 authentication.
   CLIENT_MULTI_STATEMENTS*                = 1 shl 16 
+    ## Enable/disable multi-stmt support.
   CLIENT_MULTI_RESULTS*                   = 1 shl 17 
-  CLIENT_PS_MULTI_RESULTS*                = 1 shl 18 
+    ## Enable/disable multi-results.
+  CLIENT_PS_MULTI_RESULTS*                = 1 shl 18    
+    ## Multi-results and OUT parameters in PS-protocol. 
   CLIENT_PLUGIN_AUTH *                    = 1 shl 19
+    ## Client supports plugin authentication.
   CLIENT_CONNECT_ATTRS*                   = 1 shl 20 
+    ## Client supports connection attributes.
   CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA*  = 1 shl 21
+    ## Enable authentication response packet to be larger than 255 bytes.
   CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS*    = 1 shl 22 
+    ## Don't close the connection for a user account with expired password.
   CLIENT_SESSION_TRACK*                   = 1 shl 23
+    ## Capable of handling server state change information. 
   CLIENT_DEPRECATE_EOF*                   = 1 shl 24 
+    ## Client no longer needs EOF_Packet and will use OK_Packet instead.
   CLIENT_SSL_VERIFY_SERVER_CERT*          = 1 shl 30
+    ## Verify server certificate.
   CLIENT_REMEMBER_OPTIONS*                = 1 shl 31
+    ## Don't reset the options after an unsuccessful connect.
 
+  ## Server status used by Client/Server Protocol.
   SERVER_STATUS_IN_TRANS*                 = 1
+    ## Is raised when a multi-statement transaction has been started, either 
+    ## explicitly, by means of BEGIN or COMMIT AND CHAIN, or implicitly, by 
+    ## the first transactional statement, when autocommit=off.
   SERVER_STATUS_AUTOCOMMIT*               = 2
+    ## Server in auto_commit mode.
   SERVER_MORE_RESULTS_EXISTS*             = 8
+    ## Multi query - next query exists.
   SERVER_QUERY_NO_GOOD_INDEX_USED*        = 16
   SERVER_QUERY_NO_INDEX_USED*             = 32
   SERVER_STATUS_CURSOR_EXISTS*            = 64
+    ## The server was able to fulfill the clients request and opened a read-only 
+    ## non-scrollable cursor for a query.
   SERVER_STATUS_LAST_ROW_SENT*            = 128
+    ## This flag is sent when a read-only cursor is exhausted, in reply to COM_STMT_FETCH command.
   SERVER_STATUS_DB_DROPPED*               = 256
+    ## A database was dropped.
   SERVER_STATUS_NO_BACKSLASH_ESCAPES*     = 512
   SERVER_STATUS_METADATA_CHANGED*         = 1024
+    ## Sent to the client if after a prepared statement reprepare we discovered 
+    ## that the new statement returns a different number of result set columns.
   SERVER_QUERY_WAS_SLOW*                  = 2048
   SERVER_PS_OUT_PARAMS*                   = 4096
+    ## To mark ResultSet containing output parameter values.
   SERVER_STATUS_IN_TRANS_READONLY*        = 8192
+    ## Set at the same time as SERVER_STATUS_IN_TRANS if the started multi-statement transaction 
+    ## is a read-only transaction.
   SERVER_SESSION_STATE_CHANGED*           = 16384
+    ## This status flag, when on, implies that one of the state information has changed on 
+    ## the server because of the execution of the last statement.
 
 proc toProtocolHex*(x: Natural, len: Positive): string =
+  ## Converts ``x`` to a string in the format of mysql Client/Server Protocol.
   ## For example: `(0xFAFF, 2)` => `"\xFF\xFA"`, `(0xFAFF00, 3)` => `"\x00\xFF\xFA"`. 
   var n = x
   result = newString(len)
@@ -356,6 +369,7 @@ proc toProtocolHex*(x: Natural, len: Positive): string =
     n = n shr 8
 
 proc toProtocolInt*(str: string): Natural =
+  ## Converts ``str`` to a nonnegative integer.
   ## For example: `"\xFF\xFA"` => `0xFAFF`, `"\x00\xFF\xFA"` => `0xFAFF00`.  
   result = 0
   var i = 0
@@ -389,7 +403,31 @@ proc joinNulStr(s: var string, buf: pointer, size: int): tuple[finished: bool, c
       s.add(offsetCharVal(buf, i))
 
 type
-  PacketParserKind* = enum
+#[ Handshake Initialization Packet
+3              packet Length 
+1              packet sequenceId
+1              [0a] protocolVersion serverVersion
+string[NUL]    server serverVersion
+4              connection id
+string[8]      scramble buff 1
+1              [00] filler
+2              capability flags (lower 2 bytes)
+1              character set
+2              serverStatus flags
+  if capabilities & CLIENT_PROTOCOL_41 {
+2              capability flags (upper 2 bytes)
+1              scramble payloadLen
+10             reserved (all [00])
+string[12]     scramble buff 2
+1              [00] filler
+  } else {
+13             [00] filler
+  }
+  if more data in the packet {
+string[NUL]    auth-plugin name  
+  }
+]#
+  PacketParserKind* = enum ## Kinds of packet parser.
     ppkHandshake, ppkCommand
 
   PacketParser* = object ## The packet parser object.
@@ -415,13 +453,13 @@ type
     of ppkCommand:
       command: ServerCommand 
 
-  LenEncodedState* = enum ## Parse state for length encoded integer or string.
+  LenEncodedState = enum # Parse state for length encoded integer or string.
     lenFlagVal, lenIntVal, lenStrVal
 
-  ProgressState* = enum 
+  ProgressState = enum # Progress state for parsing.
     prgOk, prgContinue, prgBreak
 
-  PacketState* = enum ## Parse state of the ``PacketParser``.
+  PacketState = enum # Parse state of the ``PacketParser``.
     packInitialization, 
     packHeader, 
     packFinish, 
@@ -431,7 +469,7 @@ type
     packResultError,
     packResultSet
 
-  HandshakeState* = enum
+  HandshakeState = enum # Parse state for handshaking.
     hssProtocolVersion, hssServerVersion, hssThreadId, 
     hssScrambleBuff1,   hssFiller0,       hssCapabilities1, 
     hssCharSet,         hssStatus,        hssCapabilities2, 
@@ -457,7 +495,7 @@ type
     protocol41*: bool
     state: HandshakeState
 
-  EofState* = enum
+  EofState = enum
     eofHeader, eofWarningCount, eofServerStatus
 
   EofPacket* = object
@@ -465,24 +503,24 @@ type
     serverStatus*: int 
     state: EofState
 
-  ResultPacketKind* = enum
+  ResultPacketKind* = enum ## Kinds of result packet.
     rpkOk, rpkError, rpkResultSet  
 
-  OkState* = enum
+  OkState = enum
     okAffectedRows, okLastInsertId, okServerStatus, 
     okWarningCount, okStatusInfo,   okSessionState
 
-  ErrorState* = enum
+  ErrorState = enum
     errErrorCode, errSqlState, errSqlStateMarker, errErrorMessage
 
-  ResultSetColumnState* = enum
+  ResultSetColumnState = enum
     colCatalog,    colSchema,      colTable,       
     colOrgTable,   colName,        colOrgName,
     colFiller1,    colCharset,     colColumnLen,   
     colColumnType, colColumnFlags, colDecimals,    
     colFiller2,    colDefaultValue
 
-  ResultSetColumnPacket* = object
+  ResultSetColumnPacket* = object 
     catalog*: string
     schema*: string
     table*: string
@@ -497,10 +535,10 @@ type
     defaultValue*: string
     state: ResultSetColumnState
 
-  ResultSetState* = enum
+  ResultSetState = enum
     rsetExtra, rsetColumnHeader, rsetColumn, rsetColumnEof, rsetRowHeader, rsetRow, rsetRowEof
 
-  ResultPacket* = object
+  ResultPacket* = object ## The result packet object.
     sequenceId*: int           
     case kind*: ResultPacketKind
     of rpkOk:
@@ -612,27 +650,32 @@ template initPacketParserImpl() =
   result.sequenceId = 0
   result.wantPayloadLen = 0
   result.storeWant = 0
-  #result.isLast = true TODO
+  result.isLast = true #TODO
   result.state = packInitialization
   result.storeState = packInitialization
   result.wantEncodedState = lenFlagVal
 
 proc initPacketParser*(): PacketParser = 
+  ## Creates a new packet parser for parsing a handshake connection.
   initPacketParserImpl
   result.kind = ppkHandshake
 
 proc initPacketParser*(command: ServerCommand): PacketParser = 
+  ## Creates a new packet parser for receiving a result packet.
   initPacketParserImpl
   result.kind = ppkCommand
   result.command = command
   
 proc finished*(p: PacketParser): bool =
+  ## Determines whether ``p`` has completed.
   result = p.state == packFinish
 
 proc sequenceId*(parser: PacketParser): int = 
+  ## Gets the current sequence ID.
   result = parser.sequenceId
 
-proc offset*(parser: PacketParser): int = 
+proc offset*(parser: PacketParser): int =
+  ## Gets the offset of the latest buffer. 
   result = parser.bufPos
 
 proc mount(p: var PacketParser, buf: pointer, size: int) = 
@@ -652,7 +695,7 @@ proc move(p: var PacketParser) =
   p.state = packHeader
   p.want = 4  
   p.word = ""
-  #p.isLast = true TODO
+  p.isLast = true # TODO
 
 proc parseHeader(p: var PacketParser): ProgressState =
   result = prgOk
@@ -680,20 +723,24 @@ proc checkIfMove(p: var PacketParser): ProgressState =
   assert p.bufRealLen == 0
   if p.bufLen > p.bufPos:
     assert p.wantPayloadLen == 0
-    if p.isLast:
-      raise newException(ValueError, "bad packet")
-    else:
-      move(p)
-      return prgContinue
+    # if p.isLast:
+    #   raise newException(ValueError, "bad packet")
+    # else:
+    #   move(p)
+    #   return prgContinue
+    move(p)
+    return prgContinue
   else: 
     if p.wantPayloadLen > 0:
       return prgBreak
     else: # == 0
-      if p.isLast:
-        raise newException(ValueError, "bad packet")
-      else:
-        move(p)
-        return prgContinue
+      # if p.isLast:
+      #   raise newException(ValueError, "bad packet")
+      # else:
+      #   move(p)
+      #   return prgContinue
+      move(p)
+      return prgContinue
 
 proc parseFixed(p: var PacketParser, field: var int): ProgressState =
   result = prgOk
@@ -895,7 +942,8 @@ proc parseHandshake(p: var PacketParser, packet: var HandshakePacket): ProgressS
       p.want = 1
     of hssFiller3:
       checkIfOk parseFiller(p)
-      if p.isLast and p.wantPayloadLen == 0:
+      # if p.isLast and p.wantPayloadLen == 0:
+      if p.wantPayloadLen == 0:
         return prgOk
       else:  
         packet.state = hssPlugin
@@ -906,6 +954,8 @@ proc parseHandshake(p: var PacketParser, packet: var HandshakePacket): ProgressS
       return prgOk
 
 proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size: int) = 
+  ## Parses the buffer data in ``buf``. ``size`` is the length of ``buf``.
+  ## If parsing is complete, ``p``.``finished`` will be ``true``.
   mount(p, buf, size)
   while true:
     case p.state
@@ -926,7 +976,8 @@ proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size
       raise newException(ValueError, "unexpected state " & $p.state)
 
 proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: string) =
-  ## Parse the ``buf`` data.
+  ## Parses the buffer data in ``buf``. 
+  ## If parsing is complete, ``p``.``finished`` will be ``true``.
   parse(p, packet, buf.cstring, buf.len)
 
 proc parseEof(p: var PacketParser, packet: var EofPacket, capabilities: int): ProgressState =
@@ -1199,6 +1250,8 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
       return prgOk
 
 proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: pointer, size: int) = 
+  ## Parses the buffer data in ``buf``. ``size`` is the length of ``buf``.
+  ## If parsing is complete, ``p``.``finished`` will be ``true``.
   mount(p, buf, size)
   while true:
     case p.state
@@ -1244,11 +1297,12 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
       raise newException(ValueError, "unexpected state " & $p.state)
 
 proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: string) =
-  ## Parse the ``buf`` data.
+  ## Parses the buffer data in ``buf``. 
+  ## If parsing is complete, ``p``.``finished`` will be ``true``.
   parse(p, packet, capabilities, buf.cstring, buf.len)
 
 type
-  ClientAuthenticationPacket* = object 
+  ClientAuthenticationPacket* = object ## The authentication packet for the handshaking connection.
     ## Packet for login request.
     sequenceId*: int           # 1
     capabilities*: int         # 4
@@ -1260,6 +1314,15 @@ type
     scrambleBuff*: string      # 20
     database*: string          # NullTerminatedString
     protocol41*: bool
+
+  ChangeUserPacket* = object ## The packet for the change user command.
+    ## Packet for change user.
+    sequenceId*: int           # 1
+    user*: string              # NullTerminatedString
+    # scrambleLen              # 1
+    scrambleBuff*: string      # 
+    database*: string          # NullTerminatedString
+    charset*: int              # [1]
 
 proc parseHex(c: char): int =
   case c
@@ -1332,10 +1395,10 @@ proc scramble323(seed: string, password: string): string =
     result[i] = chr(ord(result[i]) xor b.int)
 
 proc format*(packet: ClientAuthenticationPacket, password: string): string = 
-  var payloadLen: int
+  ## Converts ``packet`` to a string.
   if packet.protocol41:
-    payloadLen = 4 + 4 + 1 + 23 + packet.user.len + 1 + 1 +
-                    20 + packet.database.len + 1
+    let payloadLen = 4 + 4 + 1 + 23 + (packet.user.len + 1) + (1 + 20) + 
+                     (packet.database.len + 1)
     result = newStringOfCap(4 + payloadLen)
     add(result, toProtocolHex(payloadLen, 3))
     add(result, toProtocolHex(packet.sequenceId, 1))
@@ -1350,8 +1413,8 @@ proc format*(packet: ClientAuthenticationPacket, password: string): string =
     add(result, packet.database)
     add(result, '\0')
   else:
-    payloadLen = 2 + 3 + packet.user.len + 1 + 
-                    8 + 1 + packet.database.len + 1
+    let payloadLen = 2 + 3 + (packet.user.len + 1) + 
+                     8 + 1 + (packet.database.len + 1)
     result = newStringOfCap(4 + payloadLen)                
     add(result, toProtocolHex(payloadLen, 3))
     add(result, toProtocolHex(packet.sequenceId, 1))
@@ -1380,50 +1443,32 @@ template formatRestStrComImpl(cmd: ServerCommand, str: string) =
   add(result, str)
 
 proc formatComQuit*(): string = 
+  ## Converts to a ``COM_QUIT`` (mysql Client/Server Protocol) string.
   formatNoArgsComImpl COM_QUIT
 
 proc formatComInitDb*(database: string): string = 
+  ## Converts to a ``COM_INIT_DB`` (mysql Client/Server Protocol) string.
   formatRestStrComImpl COM_INIT_DB, database
 
 proc formatComQuery*(sql: string): string = 
+  ## Converts to a ``COM_QUERY`` (mysql Client/Server Protocol) string.
   formatRestStrComImpl COM_QUERY, sql
 
-proc formatComFieldList*(table: string, field = ""): string = 
-  let fieldLen = if field == nil: 0 else: field.len
-  let payloadLen = (table.len + 1 + fieldLen) + 1
+proc formatComChangeUser*(packet: ChangeUserPacket, password: string): string = 
+  ## Converts to a ``COM_CHANGE_USER`` (mysql Client/Server Protocol) string.
+  let payloadLen = 1 + (packet.user.len + 1) + (1 + 20) + (packet.database.len + 1) + 2 
   result = newStringOfCap(4 + payloadLen)
   add(result, toProtocolHex(payloadLen, 3))
   add(result, toProtocolHex(0, 1))
-  add(result, toProtocolHex(COM_FIELD_LIST.int, 1))
-  add(result, table)
+  add(result, toProtocolHex(COM_CHANGE_USER.int, 1))
+  add(result, packet.user)
   add(result, '\0')
-  if fieldLen > 0:
-    add(result, field)
-
-# proc formatComShutdown*(level: ShutDownLevel): string = 
-#   result = newStringOfCap(4 + 1)
-#   add(result, toProtocolHex(1, 3))
-#   add(result, toProtocolHex(0, 1))
-#   add(result, toProtocolHex(COM_SHUTDOWN.int, 1))
-#   let flag =
-#     case level
-#     of SHUTDOWN_DEFAULT:
-#       toProtocolHex(0x00, 1)
-#     of SHUTDOWN_WAIT_CONNECTIONS:
-#       toProtocolHex(0x01, 1)
-#     of SHUTDOWN_WAIT_TRANSACTIONS:
-#       toProtocolHex(0x02, 1)
-#     of SHUTDOWN_WAIT_UPDATES:
-#       toProtocolHex(0x08, 1)
-#     of SHUTDOWN_WAIT_ALL_BUFFERS:
-#       toProtocolHex(0x10, 1)
-#     of SHUTDOWN_WAIT_CRITICAL_BUFFERS:
-#       toProtocolHex(0x11, 1)
-#     of KILL_QUERY:
-#       toProtocolHex(0xFE, 1)
-#     of KILL_CONNECTION:
-#       toProtocolHex(0xFF, 1)
-#   add(result, flag)
+  add(result, toProtocolHex(20, 1))
+  add(result, token(packet.scrambleBuff, password))
+  add(result, packet.database)
+  add(result, '\0')
+  add(result, toProtocolHex(packet.charset, 2))
 
 proc formatComPing*(): string = 
+  ## Converts to a ``COM_PING`` (mysql Client/Server Protocol) string.
   formatNoArgsComImpl COM_PING

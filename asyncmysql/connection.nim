@@ -7,27 +7,27 @@
 import asyncdispatch, asyncnet, net, packet, error, query, strutils
 
 const 
-  MysqlBufSize* = 4096 
-  DefaultClientCharset* = CHARSET_UTF8_GENERAL_CI
-  DefaultClientCapabilities* = 
-    CLIENT_LONG_PASSWORD    or  # Use the improved version of Old Password Authentication.
-    CLIENT_FOUND_ROWS       or  # Send found rows instead of affected rows.
-    CLIENT_LONG_FLAG        or  # Get all column flags. Longer flags in Protocol::ColumnDefinition320.
-    CLIENT_CONNECT_WITH_DB  or  # Database (schema) name can be specified on connect in Handshake Response Packet.
-    CLIENT_ODBC             or  # Special handling of ODBC behavior.
-    CLIENT_LOCAL_FILES      or  # Can use LOAD DATA LOCAL.
-    CLIENT_IGNORE_SPACE     or  # Ignore spaces before '('.
-    CLIENT_PROTOCOL_41      or  # Uses the 4.1 protocol.
-    CLIENT_IGNORE_SIGPIPE   or  # Do not issue SIGPIPE if network failures occur. 
-    CLIENT_TRANSACTIONS     or  # Client knows about transactions.
-    CLIENT_RESERVED         or  # DEPRECATED: Old flag for 4.1 protocol.
-    CLIENT_RESERVED2        or  # DEPRECATED: Old flag for 4.1 authentication.
-    CLIENT_PS_MULTI_RESULTS or  # Multi-results and OUT parameters in PS-protocol.
-    CLIENT_MULTI_RESULTS    or  # Enable multi-results for COM_QUERY.
+  MysqlBufSize* = 1024 ## Size of the internal buffer used by mysql connection.
+  DefaultClientCharset* = CHARSET_UTF8_GENERAL_CI ## Default charset for mysql connection.
+  DefaultClientCapabilities* =  ## Default capabilities for mysql connection.
+    CLIENT_LONG_PASSWORD    or  ## Use the improved version of Old Password Authentication.
+    CLIENT_FOUND_ROWS       or  ## Send found rows instead of affected rows.
+    CLIENT_LONG_FLAG        or  ## Get all column flags. Longer flags in Protocol::ColumnDefinition320.
+    CLIENT_CONNECT_WITH_DB  or  ## Database (schema) name can be specified on connect in Handshake Response Packet.
+    CLIENT_ODBC             or  ## Special handling of ODBC behavior.
+    CLIENT_LOCAL_FILES      or  ## Can use LOAD DATA LOCAL.
+    CLIENT_IGNORE_SPACE     or  ## Ignore spaces before '('.
+    CLIENT_PROTOCOL_41      or  ## Uses the 4.1 protocol.
+    CLIENT_IGNORE_SIGPIPE   or  ## Do not issue SIGPIPE if network failures occur. 
+    CLIENT_TRANSACTIONS     or  ## Client knows about transactions.
+    CLIENT_RESERVED         or  ## DEPRECATED: Old flag for 4.1 protocol.
+    CLIENT_RESERVED2        or  ## DEPRECATED: Old flag for 4.1 authentication.
+    CLIENT_PS_MULTI_RESULTS or  ## Multi-results and OUT parameters in PS-protocol.
+    CLIENT_MULTI_RESULTS    or  ## Enable multi-results for COM_QUERY.
     CLIENT_MULTI_STATEMENTS 
 
 type
-  AsyncMysqlConnection* = ref object
+  AsyncMysqlConnection* = ref object ## Asynchronous mysql connection.
     socket: AsyncSocket
     parser: PacketParser
     handshakePacket: HandshakePacket
@@ -35,7 +35,7 @@ type
     bufPos: int
     bufLen: int
 
-  QueryStream* = ref object
+  QueryStream* = ref object ## Stream object for queries with multiple statements .
     conn: AsyncMysqlConnection
     finished: bool
 
@@ -142,7 +142,7 @@ proc open*(
     raise getCurrentException()
 
 proc close*(conn: AsyncMysqlConnection) =
-  # Closes the database connection ``conn``.
+  # Closes the database connection ``conn`` and releases the associated resources.
   close(conn.socket)
 
 proc newQueryStream(conn: AsyncMysqlConnection): QueryStream =
@@ -161,10 +161,11 @@ proc read*(stream: QueryStream): Future[ResultPacket] {.async.} =
       stream.finished = true
 
 proc finished*(stream: QueryStream): bool =
+  ## Determines whether ``stream`` has completed.
   result = stream.finished
   
 proc execQuery*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.async.} =
-  ## Executes the SQL statements. 
+  ## Executes the SQL statements. ``q`` can be a single statement or multiple statements.
   await send(conn.socket, formatComQuery(string(q)))
   result = newQueryStream(conn)
   
@@ -176,16 +177,30 @@ proc execQueryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket
 proc execQuit*(conn: AsyncMysqlConnection): Future[void] {.async.} =
   ## Notifies the mysql server that the connection is disconnected. Attempting to request
   ## the mysql server again will causes unknown errors.
+  ##
+  ## ``conn`` should then be closed immediately after that.
   await send(conn.socket, formatComQuit())
 
-# execQueryOne(conn, sql"SHOW [FULL] FIELDS FROM <database>") instead of 
-#
-# proc execFieldList*(conn: AsyncMysqlConnection, table: string, field = ""): Future[ResultPacket] {.async.} =
-#   ## Changes the default schema of the connection. 
-#   ##
-#   ## Equivalent to ``SHOW [FULL] COLUMNS FROM ...;``
-#   await send(conn.socket, formatComFieldList(table, field))
-#   result = await recvResultPacket(conn, COM_FIELD_LIST) 
+proc execInitDb*(conn: AsyncMysqlConnection, database: string): Future[ResultPacket] {.async.} =
+  ## Changes the default database on the connection. 
+  ##
+  ## Equivalent to ``use <database>;``
+  await send(conn.socket, formatComInitDb(database))
+  result = await recvResultPacket(conn, COM_INIT_DB) 
+
+proc execChangeUser*(conn: AsyncMysqlConnection, user: string, password: string, database: string, 
+                     charset = DefaultClientCharset): Future[ResultPacket] {.async.} =
+  ## Changes the user and causes the database specified by ``database`` to become the default (current) 
+  ## database on the connection specified by mysql. In subsequent queries, this database is 
+  ## the default for table references that include no explicit database specifier.
+  await send(conn.socket, formatComChangeUser(
+    ChangeUserPacket(
+      sequenceId: 0,
+      user: user,
+      scrambleBuff: conn.handshakePacket.scrambleBuff,
+      database: database,
+      charset: charset), password))
+  result = await recvResultPacket(conn, COM_INIT_DB) 
 
 proc execPing*(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
   ## Checks whether the connection to the server is working. 

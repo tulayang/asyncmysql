@@ -1,11 +1,12 @@
-#    AsyncMysql - Asynchronous MySQL connector written in pure Nim
-#        (c) Copyright 2017 Wang Tong
 #
-#    See the file "LICENSE", included in this distribution, for
-#    details about the copyright.
+#
+#            Nim's Runtime Library
+#        (c) Copyright 2015 Andreas Rumpf
+#
+#
 
 type
-  SqlQuery* = distinct string
+  SqlQuery* = distinct string ## An SQL query string
 
 proc dbQuote(s: string): string =
   ## DB quotes the string.
