@@ -733,7 +733,10 @@ proc offset*(parser: PacketParser): int =
   ## Gets the offset of the latest buffer. 
   result = parser.bufPos
 
-proc mount(p: var PacketParser, buf: pointer, size: int) = 
+proc buffered*(p: PacketParser): bool =
+  result = p.bufPos < p.bufLen
+
+proc mount*(p: var PacketParser, buf: pointer, size: int) = 
   p.buf = buf
   p.bufLen = size
   p.bufPos = 0
@@ -913,7 +916,7 @@ template checkPrg(state: ProgressState): untyped =
   of prgContinue:
     continue
   of prgBreak:
-    return
+    return false
 
 template checkIfOk(state: ProgressState): untyped =
   case state
@@ -924,7 +927,7 @@ template checkIfOk(state: ProgressState): untyped =
   of prgBreak:
     return prgBreak
 
-proc parseHandshake(p: var PacketParser, packet: var HandshakePacket): ProgressState = 
+proc parseHandshakeProgress(p: var PacketParser, packet: var HandshakePacket): ProgressState = 
   while true:
     case packet.state
     of hssProtocolVersion:
@@ -997,10 +1000,9 @@ proc parseHandshake(p: var PacketParser, packet: var HandshakePacket): ProgressS
       checkIfOk parseNul(p, packet.plugin)
       return prgOk
 
-proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size: int) = 
+proc parseHandshake*(p: var PacketParser, packet: var HandshakePacket): bool = 
   ## Parses the buffer data in ``buf``. ``size`` is the length of ``buf``.
   ## If parsing is complete, ``p``.``finished`` will be ``true``.
-  mount(p, buf, size)
   while true:
     case p.state
     of packInitialization:
@@ -1011,20 +1013,20 @@ proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: pointer, size
     of packHeader:
       checkPrg parseHeader(p)
     of packHandshake:
-      checkPrg parseHandshake(p, packet)
+      checkPrg parseHandshakeProgress(p, packet)
       p.state = packFinish
     of packFinish:
       packet.sequenceId = p.sequenceId
-      return
+      return true
     else:
       raise newException(ValueError, "unexpected state " & $p.state)
 
-proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: string) =
-  ## Parses the buffer data in ``buf``. 
-  ## If parsing is complete, ``p``.``finished`` will be ``true``.
-  parse(p, packet, buf.cstring, buf.len)
+# proc parse*(p: var PacketParser, packet: var HandshakePacket, buf: string) =
+#   ## Parses the buffer data in ``buf``. 
+#   ## If parsing is complete, ``p``.``finished`` will be ``true``.
+#   parse(p, packet, buf.cstring, buf.len)
 
-proc parseEof(p: var PacketParser, packet: var EofPacket, capabilities: int): ProgressState =
+proc parseEofProgress(p: var PacketParser, packet: var EofPacket, capabilities: int): ProgressState =
   while true:
     case packet.state
     of eofHeader:
@@ -1043,7 +1045,7 @@ proc parseEof(p: var PacketParser, packet: var EofPacket, capabilities: int): Pr
       assert p.remainingPayloadLen == 0
       return prgOk
 
-proc parseOk(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
+proc parseOkProgress(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
   template checkHowStatusInfo: untyped =
     if (capabilities and CLIENT_SESSION_TRACK) > 0 and p.remainingPayloadLen > 0:
       packet.okState = okStatusInfo
@@ -1069,6 +1071,7 @@ proc parseOk(p: var PacketParser, packet: var ResultPacket, capabilities: int): 
         checkHowStatusInfo
     of okServerStatus:
       checkIfOk parseFixed(p, packet.serverStatus)
+      packet.hasMoreResults = (packet.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
       if (capabilities and CLIENT_PROTOCOL_41) > 0:
         packet.okState = okWarningCount
         p.want = 2
@@ -1085,12 +1088,27 @@ proc parseOk(p: var PacketParser, packet: var ResultPacket, capabilities: int): 
         p.wantEncodedState = lenFlagVal
       else:
         checkIfOk parseFixed(p, packet.message)
+        packet.sequenceId = p.sequenceId
         return prgOk
     of okSessionState:
       checkIfOk parseLenEncoded(p, packet.sessionState)
+      packet.sequenceId = p.sequenceId
       return prgOk
 
-proc parseError(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
+proc parseOk*(p: var PacketParser, packet: var ResultPacket, capabilities: int): bool =
+  while true:
+    case p.state
+    of packHeader:
+      checkPrg parseHeader(p)
+    of packResultOk:
+      checkPrg parseOkProgress(p, packet, capabilities)
+      p.state = packFinish
+    of packFinish:
+      return true
+    else:
+      raise newException(ValueError, "unexpected state " & $p.state)  
+
+proc parseErrorProgress(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
   while true:
     case packet.errState
     of errErrorCode:
@@ -1111,10 +1129,24 @@ proc parseError(p: var PacketParser, packet: var ResultPacket, capabilities: int
       p.want = p.remainingPayloadLen
     of errErrorMessage:
       checkIfOk parseFixed(p, packet.errorMessage)
+      packet.sequenceId = p.sequenceId
       return prgOk
 
-proc parseResultSetField(p: var PacketParser, packet: var ResultSetFieldPacket,
-                          capabilities: int): ProgressState =
+proc parseError*(p: var PacketParser, packet: var ResultPacket, capabilities: int): bool =
+  while true:
+    case p.state
+    of packHeader:
+      checkPrg parseHeader(p)
+    of packResultError:
+      checkPrg parseErrorProgress(p, packet, capabilities)
+      p.state = packFinish
+    of packFinish:
+      return true
+    else:
+      raise newException(ValueError, "unexpected state " & $p.state)  
+
+proc parseResultSetFieldProgress(p: var PacketParser, packet: var ResultSetFieldPacket,
+                                 capabilities: int): ProgressState =
   while true:
     case packet.state
     of colCatalog:
@@ -1211,7 +1243,7 @@ proc parseResultSetField(p: var PacketParser, packet: var ResultSetFieldPacket,
       assert p.remainingPayloadLen == 0
       return prgOk
 
-proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
+proc parseResultSetProgress(p: var PacketParser, packet: var ResultPacket, capabilities: int): ProgressState =
   while true:
     case packet.rsetState
     of rsetExtra:
@@ -1231,13 +1263,14 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
         packet.rsetState = rsetField
         p.want = header
     of rsetField:
-      checkIfOk parseResultSetField(p, packet.fields[packet.fieldsPos], capabilities)
+      checkIfOk parseResultSetFieldProgress(p, packet.fields[packet.fieldsPos], capabilities)
       packet.rsetState = rsetFieldHeader
       p.want = 1
       inc(packet.fieldsPos)
     of rsetFieldEof:
-      checkIfOk parseEof(p, packet.fieldsEof, capabilities) 
+      checkIfOk parseEofProgress(p, packet.fieldsEof, capabilities) 
       if p.command == COM_FIELD_LIST:
+        packet.sequenceId = p.sequenceId
         return prgOk
       else:
         packet.rsetState = rsetRowHeader
@@ -1267,14 +1300,27 @@ proc parseResultSet(p: var PacketParser, packet: var ResultPacket, capabilities:
       p.want = 1
       p.wantEncodedState = lenFlagVal 
     of rsetRowEof:
-      checkIfOk parseEof(p, packet.rowsEof, capabilities)
+      checkIfOk parseEofProgress(p, packet.rowsEof, capabilities)
       packet.hasMoreResults = (packet.rowsEof.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
+      packet.sequenceId = p.sequenceId
       return prgOk
 
-proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: pointer, size: int) = 
+proc parseResultSet*(p: var PacketParser, packet: var ResultPacket, capabilities: int): bool =
+  while true:
+    case p.state
+    of packHeader:
+      checkPrg parseHeader(p)
+    of packResultSet:
+      checkPrg parseResultSetProgress(p, packet, capabilities)
+      p.state = packFinish
+    of packFinish:
+      return true
+    else:
+      raise newException(ValueError, "unexpected state " & $p.state)  
+
+proc parseResultHeader*(p: var PacketParser, packet: var ResultPacket): bool = 
   ## Parses the buffer data in ``buf``. ``size`` is the length of ``buf``.
   ## If parsing is complete, ``p``.``finished`` will be ``true``.
-  mount(p, buf, size)
   while true:
     case p.state
     of packInitialization:
@@ -1302,26 +1348,63 @@ proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, bu
         packet.fieldsCount = header
         p.state = packResultSet
         p.want = p.remainingPayloadLen
-    of packResultOk:
-      checkPrg parseOk(p, packet, capabilities)
-      packet.hasMoreResults = (packet.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
-      p.state = packFinish
-    of packResultError:  
-      checkPrg parseError(p, packet, capabilities)
-      p.state = packFinish  
-    of packResultSet:
-      checkPrg parseResultSet(p, packet, capabilities)
-      p.state = packFinish  
-    of packFinish:
-      packet.sequenceId = p.sequenceId
-      return
+    of packResultOk, packResultError, packResultSet:
+      return true
     else:
       raise newException(ValueError, "unexpected state " & $p.state)
 
-proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: string) =
-  ## Parses the buffer data in ``buf``. 
-  ## If parsing is complete, ``p``.``finished`` will be ``true``.
-  parse(p, packet, capabilities, buf.cstring, buf.len)
+
+# proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: pointer, size: int) = 
+#   ## Parses the buffer data in ``buf``. ``size`` is the length of ``buf``.
+#   ## If parsing is complete, ``p``.``finished`` will be ``true``.
+#   mount(p, buf, size)
+#   while true:
+#     case p.state
+#     of packInitialization:
+#       p.state = packResultHeader
+#       p.want = 1
+#       move(p)
+#     of packHeader:
+#       checkPrg parseHeader(p)
+#     of packResultHeader:
+#       var header: int
+#       checkPrg parseFixed(p, header)
+#       case header
+#       of 0x00:
+#         packet = initResultPacket(rpkOk)
+#         p.state = packResultOk
+#         p.want = 1
+#         p.wantEncodedState = lenFlagVal
+#       of 0xFF:
+#         packet = initResultPacket(rpkError)
+#         p.state = packResultError
+#         p.want = 2
+#         p.wantEncodedState = lenFlagVal
+#       else:
+#         packet = initResultPacket(rpkResultSet)
+#         packet.fieldsCount = header
+#         p.state = packResultSet
+#         p.want = p.remainingPayloadLen
+#     of packResultOk:
+#       checkPrg parseOk(p, packet, capabilities)
+#       packet.hasMoreResults = (packet.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
+#       p.state = packFinish
+#     of packResultError:  
+#       checkPrg parseError(p, packet, capabilities)
+#       p.state = packFinish  
+#     of packResultSet:
+#       checkPrg parseResultSet(p, packet, capabilities)
+#       p.state = packFinish  
+#     of packFinish:
+#       packet.sequenceId = p.sequenceId
+#       return
+#     else:
+#       raise newException(ValueError, "unexpected state " & $p.state)
+
+# proc parse*(p: var PacketParser, packet: var ResultPacket, capabilities: int, buf: string) =
+#   ## Parses the buffer data in ``buf``. 
+#   ## If parsing is complete, ``p``.``finished`` will be ``true``.
+#   parse(p, packet, capabilities, buf.cstring, buf.len)
 
 type
   ClientAuthenticationPacket* = object ## The authentication packet for the handshaking connection.
