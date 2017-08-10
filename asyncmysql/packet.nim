@@ -1405,6 +1405,7 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
           else:
             packet.rsetState = rsetRow
             p.want = header
+            assert p.want > 0
             return (0, rowFieldBegin)
         of rsetRow:
           if packet.meetNull:
