@@ -264,129 +264,174 @@ suite "Command Queury":
       check packet.kind == rpkResultSet
       var finished = false
       if parser.buffered:
-        finished = parseResultSet(parser, packet, handshakePacket.capabilities)
+        finished = parseFields(parser, packet, handshakePacket.capabilities)
       if not finished:
         while true:
           let buf = await recv(socket, 1024)
           echoHex "  ResultSet Packet: ", buf
           mount(parser, buf.cstring, buf.len)
-          finished = parseResultSet(parser, packet, handshakePacket.capabilities)
+          finished = parseFields(parser, packet, handshakePacket.capabilities)
           if finished:
             break
       check finished == true
+      check packet.hasRows == true
       echo "  ResultSet Packet: ", packet
-      echo "  Buffer length: 1024, offset: ", parser.offset 
+      if packet.hasRows:
+        var rows: seq[string] = @[]
+        var rowsPos = -1
+        var fieldBuf = newString(1024)
+        var offset: int
+        var rowState: RowState
+        if parser.buffered:
+          while true:
+            (offset, rowState) = parseRows(parser, packet, handshakePacket.capabilities, fieldBuf.cstring, 1024)
+            case rowState
+            of rowFieldBegin:
+              inc(rowsPos)
+              add(rows, "")
+            of rowFieldBufFull:
+              add(rows[rowsPos], fieldBuf[0..offset-1])
+            of rowFieldEnd:
+              add(rows[rowsPos], fieldBuf[0..offset-1])
+            of rowBufEmpty:
+              add(rows[rowsPos], fieldBuf[0..offset-1])
+              break
+            of rowFinished:
+              break
+        if rowState != rowFinished:
+          check rowState == rowBufEmpty
+          block parsing:
+            while true:
+              let buf = await recv(socket, 1024)
+              echoHex "  ResultSet Packet: ", buf
+              mount(parser, buf.cstring, buf.len)
+              while true:
+                (offset, rowState) = parseRows(parser, packet, handshakePacket.capabilities, fieldBuf.cstring, 1024)
+                case rowState 
+                of rowFieldBegin:
+                  inc(rowsPos)
+                  add(rows, "")
+                of rowFieldBufFull:
+                  add(rows[rowsPos], fieldBuf[0..offset-1])
+                of rowFieldEnd:
+                  add(rows[rowsPos], fieldBuf[0..offset-1])
+                of rowBufEmpty:
+                  add(rows[rowsPos], fieldBuf[0..offset-1])
+                  break
+                of rowFinished:
+                  break parsing
+        echo "  ResultSet Rows: ", rows
     waitFor1 recvResultSet()  
 
-  test "query `select @@version_comment limit 1;`":
-    proc sendComQuery() {.async.} =
-      await send(socket, formatComQuery("select @@version_comment limit 1;"))
-    waitFor1 sendComQuery()  
+#   test "query `select @@version_comment limit 1;`":
+#     proc sendComQuery() {.async.} =
+#       await send(socket, formatComQuery("select @@version_comment limit 1;"))
+#     waitFor1 sendComQuery()  
 
-    proc recvResultSet() {.async.} =
-      var parser = initPacketParser(COM_QUERY) 
-      var packet: ResultPacket
-      while true:
-        let buf = await recv(socket, 3)
-        check buf != ""
-        echoHex "  ResultSet Packet: ", buf
-        mount(parser, buf.cstring, buf.len)
-        let finished = parseResultHeader(parser, packet)
-        if finished:
-          break
-      check packet.kind == rpkResultSet
-      var finished = false
-      if parser.buffered:
-        finished = parseResultSet(parser, packet, handshakePacket.capabilities)
-      if not finished:
-        while true:
-          let buf = await recv(socket, 3)
-          echoHex "  ResultSet Packet: ", buf
-          mount(parser, buf.cstring, buf.len)
-          finished = parseResultSet(parser, packet, handshakePacket.capabilities)
-          if finished:
-            break
-      check finished == true
-      echo "  ResultSet Packet: ", packet
-      echo "  Buffer length: 3, offset: ", parser.offset 
-    waitFor1 recvResultSet()  
+#     proc recvResultSet() {.async.} =
+#       var parser = initPacketParser(COM_QUERY) 
+#       var packet: ResultPacket
+#       while true:
+#         let buf = await recv(socket, 3)
+#         check buf != ""
+#         echoHex "  ResultSet Packet: ", buf
+#         mount(parser, buf.cstring, buf.len)
+#         let finished = parseResultHeader(parser, packet)
+#         if finished:
+#           break
+#       check packet.kind == rpkResultSet
+#       var finished = false
+#       if parser.buffered:
+#         finished = parseResultSet(parser, packet, handshakePacket.capabilities)
+#       if not finished:
+#         while true:
+#           let buf = await recv(socket, 3)
+#           echoHex "  ResultSet Packet: ", buf
+#           mount(parser, buf.cstring, buf.len)
+#           finished = parseResultSet(parser, packet, handshakePacket.capabilities)
+#           if finished:
+#             break
+#       check finished == true
+#       echo "  ResultSet Packet: ", packet
+#       echo "  Buffer length: 3, offset: ", parser.offset 
+#     waitFor1 recvResultSet()  
 
-  test "use {database} with `test` database":
-    proc sendComInitDb() {.async.} =
-      await send(socket, formatComInitDb("test"))
-    waitFor1 sendComInitDb()  
+#   test "use {database} with `test` database":
+#     proc sendComInitDb() {.async.} =
+#       await send(socket, formatComInitDb("test"))
+#     waitFor1 sendComInitDb()  
 
-    proc recvResultOk() {.async.} =
-      var parser = initPacketParser(COM_PING) 
-      var packet: ResultPacket
-      while true:
-        let buf = await recv(socket, 32)
-        check buf != ""
-        echoHex "  Ok Packet: ", buf
-        mount(parser, buf.cstring, buf.len)
-        let finished = parseResultHeader(parser, packet)
-        if finished:
-          break
-      check packet.kind == rpkOk
-      var finished = false
-      if parser.buffered:
-        finished = parseOk(parser, packet, handshakePacket.capabilities)
-      if not finished:
-        while true:
-          let buf = await recv(socket, 32)
-          echoHex "  Ok Packet: ", buf
-          mount(parser, buf.cstring, buf.len)
-          finished = parseOk(parser, packet, handshakePacket.capabilities)
-          if finished:
-            break
-      check finished == true
-      echo "  Ok Packet: ", packet
-    waitFor1 recvResultOk()  
+#     proc recvResultOk() {.async.} =
+#       var parser = initPacketParser(COM_PING) 
+#       var packet: ResultPacket
+#       while true:
+#         let buf = await recv(socket, 32)
+#         check buf != ""
+#         echoHex "  Ok Packet: ", buf
+#         mount(parser, buf.cstring, buf.len)
+#         let finished = parseResultHeader(parser, packet)
+#         if finished:
+#           break
+#       check packet.kind == rpkOk
+#       var finished = false
+#       if parser.buffered:
+#         finished = parseOk(parser, packet, handshakePacket.capabilities)
+#       if not finished:
+#         while true:
+#           let buf = await recv(socket, 32)
+#           echoHex "  Ok Packet: ", buf
+#           mount(parser, buf.cstring, buf.len)
+#           finished = parseOk(parser, packet, handshakePacket.capabilities)
+#           if finished:
+#             break
+#       check finished == true
+#       echo "  Ok Packet: ", packet
+#     waitFor1 recvResultOk()  
 
-  test "use {database} with `aaa` (non-existent) database":
-    proc sendComInitDb() {.async.} =
-      await send(socket, formatComInitDb("aaa"))
-    waitFor1 sendComInitDb()  
+#   test "use {database} with `aaa` (non-existent) database":
+#     proc sendComInitDb() {.async.} =
+#       await send(socket, formatComInitDb("aaa"))
+#     waitFor1 sendComInitDb()  
 
-    proc recvResultError() {.async.} =
-      var parser = initPacketParser(COM_PING) 
-      var packet: ResultPacket
-      while true:
-        let buf = await recv(socket, 32)
-        check buf != ""
-        echoHex "  Error Packet: ", buf
-        mount(parser, buf.cstring, buf.len)
-        let finished = parseResultHeader(parser, packet)
-        if finished:
-          break
-      check packet.kind == rpkError
-      var finished = false
-      if parser.buffered:
-        finished = parseError(parser, packet, handshakePacket.capabilities)
-      if not finished:
-        while true:
-          let buf = await recv(socket, 32)
-          echoHex "  Error Packet: ", buf
-          mount(parser, buf.cstring, buf.len)
-          finished = parseError(parser, packet, handshakePacket.capabilities)
-          if finished:
-            break
-      check finished == true
-      echo "  Error Packet: ", packet
-    waitFor1 recvResultError()  
+#     proc recvResultError() {.async.} =
+#       var parser = initPacketParser(COM_PING) 
+#       var packet: ResultPacket
+#       while true:
+#         let buf = await recv(socket, 32)
+#         check buf != ""
+#         echoHex "  Error Packet: ", buf
+#         mount(parser, buf.cstring, buf.len)
+#         let finished = parseResultHeader(parser, packet)
+#         if finished:
+#           break
+#       check packet.kind == rpkError
+#       var finished = false
+#       if parser.buffered:
+#         finished = parseError(parser, packet, handshakePacket.capabilities)
+#       if not finished:
+#         while true:
+#           let buf = await recv(socket, 32)
+#           echoHex "  Error Packet: ", buf
+#           mount(parser, buf.cstring, buf.len)
+#           finished = parseError(parser, packet, handshakePacket.capabilities)
+#           if finished:
+#             break
+#       check finished == true
+#       echo "  Error Packet: ", packet
+#     waitFor1 recvResultError()  
 
-  test "quit":
-    proc sendComQuit() {.async.} =
-      await send(socket, formatComQuit())
-    waitFor1 sendComQuit()  
+#   test "quit":
+#     proc sendComQuit() {.async.} =
+#       await send(socket, formatComQuit())
+#     waitFor1 sendComQuit()  
 
-    proc recvClosed() {.async.} =
-      var parser = initPacketParser(COM_QUIT) 
-      var packet: ResultPacket
-      while true:
-        var buf = await recv(socket, 1024)
-        check buf.len == 0
-        break
-    waitFor1 recvClosed()  
+#     proc recvClosed() {.async.} =
+#       var parser = initPacketParser(COM_QUIT) 
+#       var packet: ResultPacket
+#       while true:
+#         var buf = await recv(socket, 1024)
+#         check buf.len == 0
+#         break
+#     waitFor1 recvClosed()  
 
-  close(socket)
+#   close(socket)
