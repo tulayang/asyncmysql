@@ -23,28 +23,31 @@ select user from user;
 commit;
 """, "root"))
 
-      let packet0 = await read(stream)
+      let (packet0, _) = await read(stream)
       echo "  >>> strart transaction;"
       echo "  ", packet0
+      echo stream.finished, " ", packet0.kind, " ", packet0.hasMoreResults
       check stream.finished == false
       check packet0.kind == rpkOk
       check packet0.hasMoreResults == true
 
-      let packet1 = await read(stream)
+      let (packet1, rows1) = await read(stream)
       echo "  >>> select host, user from user where user = ?;"
       echo "  ", packet1
+      echo "  ", rows1
       check stream.finished == false
       check packet1.kind == rpkResultSet
       check packet1.hasMoreResults == true
 
-      let packet2 = await read(stream)
+      let (packet2, rows2) = await read(stream)
       echo "  >>> select user from user;"
       echo "  ", packet2
+      echo "  ", rows2
       check stream.finished == false
       check packet2.kind == rpkResultSet
       check packet2.hasMoreResults == true
 
-      let packet3 = await read(stream)
+      let (packet3, _) = await read(stream)
       echo "  >>> commit;"
       echo "  ", packet3
       check stream.finished == true
@@ -63,14 +66,14 @@ select var;
 select 10;
 """, "root"))
       
-      let packet0 = await read(stream)
+      let (packet0, _) = await read(stream)
       echo "  >>> select 100;"
       echo "  ", packet0
       check stream.finished == false
       check packet0.kind == rpkResultSet
       check packet0.hasMoreResults == true
 
-      let packet1 = await read(stream)
+      let (packet1, _) = await read(stream)
       echo "  >>> select var;"
       echo "  ", packet1
       check stream.finished == true
@@ -83,7 +86,7 @@ select 10;
   test "query singly":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let packet = await execQueryOne(conn, sql("select 100"))
+      let (packet, _) = await execQueryOne(conn, sql("select 100"))
       echo "  >>> select 100;"
       echo "  ", packet
       check packet.kind == rpkResultSet
@@ -106,13 +109,13 @@ select 10;
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
 
-      let packet0 = await execQueryOne(conn, sql"use test")
+      let (packet0, _) = await execQueryOne(conn, sql"use test")
       echo "  >>> use test;"
       echo "  ", packet0
       check packet0.kind == rpkOk
       check packet0.hasMoreResults == false
 
-      let packet1 = await execQueryOne(conn, sql("select * from user;"))
+      let (packet1, _) = await execQueryOne(conn, sql("select * from user;"))
       echo "  >>> select * from user;"
       echo "  ", packet1
       check packet1.kind == rpkError
@@ -124,9 +127,10 @@ select 10;
   test "show full fields from <table>":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let packet0 = await execQueryOne(conn, sql"show full fields from user;")
+      let (packet0, rows) = await execQueryOne(conn, sql"show full fields from user;")
       echo "  >>> show full fields from user;"
       echo "  ... ", packet0.fields[0], " ..."
+      echo "  ... ", rows[0], " ..."
       check packet0.kind == rpkResultSet
       check packet0.hasMoreResults == false
       close(conn)

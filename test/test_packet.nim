@@ -19,7 +19,7 @@ suite "Handshake Authentication With Valid User":
 
   test "recv handshake initialization packet with 1024 bytes buffer":
     proc recvHandshakeInitialization() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(ppkHandshake) 
       while true:
         let buf = await recv(socket, 1024)
         echoHex "  Handshake Initialization Packet: ", buf
@@ -36,7 +36,7 @@ suite "Handshake Authentication With Valid User":
     proc sendClientAuthentication() {.async.} =
       await send(
         socket, 
-        format(
+        formatClientAuth(
           ClientAuthenticationPacket(
             sequenceId: handshakePacket.sequenceId + 1, 
             capabilities: 521167,
@@ -51,7 +51,7 @@ suite "Handshake Authentication With Valid User":
 
   test "recv result ok packet":
     proc recvResultOk() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(ppkHandshake) 
       var packet: ResultPacket
       while true:
         let buf = await recv(socket, 32)
@@ -89,7 +89,7 @@ suite "Handshake Authentication With Invalid User":
 
   test "recv handshake initialization packet with 3 bytes buffer":
     proc recvHandshakeInitialization() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(ppkHandshake) 
       while true:
         var buf = await recv(socket, 3)
         echoHex "  Handshake Initialization Packet: ", buf
@@ -107,7 +107,7 @@ suite "Handshake Authentication With Invalid User":
     proc sendClientAuthentication() {.async.} =
       await send(
         socket, 
-        format(
+        formatClientAuth(
           ClientAuthenticationPacket(
             sequenceId: handshakePacket.sequenceId + 1, 
             capabilities: 521167,
@@ -122,7 +122,7 @@ suite "Handshake Authentication With Invalid User":
 
   test "recv result error packet":
     proc recvResultError() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(ppkHandshake) 
       var packet: ResultPacket
       while true:
         let buf = await recv(socket, 16)
@@ -161,7 +161,7 @@ suite "Command Queury":
 
   test "recv handshake initialization packet":
     proc recvHandshakeInitialization() {.async.} =
-      var parser = initPacketParser() 
+      var parser = initPacketParser(ppkHandshake) 
       while true:
         let buf = await recv(socket, 1024)
         check buf != ""
@@ -173,7 +173,7 @@ suite "Command Queury":
     proc sendClientAuthentication() {.async.} =
       await send(
         socket, 
-        format(
+        formatClientAuth(
           ClientAuthenticationPacket(
             sequenceId: handshakePacket.sequenceId + 1, 
             capabilities: 521167,
@@ -358,46 +358,20 @@ suite "Command Queury":
       check finished == true
       check packet.hasRows == true
       if packet.hasRows:
-        var rows: seq[string] = @[""]
-        var rowsPos = 0
-        var rowState = rowFieldBegin
+        var finished = false
+        var rows = initRowList()
         if parser.buffered:
+          finished = parseRows(parser, packet, handshakePacket.capabilities, rows)
+        if not finished:
           while true:
-            rowState = parseRows(parser, packet, handshakePacket.capabilities, rows[rowsPos])
-            case rowState
-            of rowFieldBegin:
-              inc(rowsPos)
-              add(rows, "")
-            of rowFieldBufFull:
-              discard
-            of rowFieldEnd:
-              discard
-            of rowBufEmpty:
+            let buf = await recv(socket, 3)
+            echoHex "  ResultSet Packet: ", buf
+            mount(parser, buf.cstring, buf.len)
+            finished = parseRows(parser, packet, handshakePacket.capabilities, rows)
+            if finished:
               break
-            of rowFinished:
-              break
-        if rowState != rowFinished:
-          block parsing:
-            while true:
-              let buf = await recv(socket, 3)
-              echoHex "  ResultSet Packet: ", buf
-              mount(parser, buf.cstring, buf.len)
-              while true:
-                rowState = parseRows(parser, packet, handshakePacket.capabilities, rows[rowsPos])
-                case rowState 
-                of rowFieldBegin:
-                  inc(rowsPos)
-                  add(rows, "")
-                of rowFieldBufFull:
-                  discard
-                of rowFieldEnd:
-                  discard
-                of rowBufEmpty:
-                  break
-                of rowFinished:
-                  break parsing
         echo "  ResultSet Packet: ", packet
-        echo "  ResultSet Rows: ", rows
+        echo "  ResultSet Rows: ", rows.value
     waitFor1 recvResultSet()  
 
   test "use {database} with `test` database":

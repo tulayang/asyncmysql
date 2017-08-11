@@ -31,6 +31,7 @@ type
     socket: AsyncSocket
     parser: PacketParser
     handshakePacket: HandshakePacket
+    resultPacket: ResultPacket
     buf: array[MysqlBufSize, char]
     bufPos: int
     bufLen: int
@@ -51,37 +52,78 @@ proc DEBUG(conn: AsyncMysqlConnection) =
       DEBUG_index = 0
   writeFile("/home/king/App/app/asyncmysql/test/log", DEBUG_data)  
   DEBUG_data = ""
+  DEBUG_index = 0
 
 proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
-  if conn.bufPos == MysqlBufSize:
-    conn.bufPos = 0
-    assert conn.bufLen == 0
-  if conn.bufLen <= 0:
-    assert conn.bufPos < MysqlBufSize
-    conn.bufLen = await recvInto(conn.socket, conn.buf[conn.bufPos].addr, MysqlBufSize - conn.bufPos)
-    #DEBUG(conn)
-    if conn.bufLen == 0:
-      raiseMysqlError("peer disconnected unexpectedly")
+  conn.bufPos = 0
+  conn.bufLen = await recvInto(conn.socket, conn.buf[0].addr, MysqlBufSize)
+  #DEBUG(conn)
+  if conn.bufLen == 0:
+    raiseMysqlError("peer disconnected unexpectedly")
 
-proc recvResultPacket(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
-  conn.parser = initPacketParser() 
-  while true:
-    await recv(conn)
-    parse(conn.parser, result, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, conn.bufLen)
-    inc(conn.bufPos, conn.parser.offset)
-    dec(conn.bufLen, conn.parser.offset)
-    if conn.parser.finished:
-      break  
+proc recvResultHeader(conn: AsyncMysqlConnection): Future[void] {.async.} =
+  var finished = false
+  if conn.bufLen > 0:
+    mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+    finished = parseResultHeader(conn.parser, conn.resultPacket)
+  if not finished:  
+    while true:
+      await recv(conn)
+      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+      finished = parseResultHeader(conn.parser, conn.resultPacket)
+      if finished:
+        break
 
-proc recvResultPacket(conn: AsyncMysqlConnection, command: ServerCommand): Future[ResultPacket] {.async.} =
-  conn.parser = initPacketParser(command) 
-  while true:
-    await recv(conn)
-    parse(conn.parser, result, conn.handshakePacket.capabilities, conn.buf[conn.bufPos].addr, conn.bufLen)
-    inc(conn.bufPos, conn.parser.offset)
-    dec(conn.bufLen, conn.parser.offset)
-    if conn.parser.finished:
-      break    
+proc recvOkPacket(conn: AsyncMysqlConnection): Future[void] {.async.} =
+  var finished = false
+  if conn.parser.buffered:
+    finished = parseOk(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
+  if not finished:  
+    while true:
+      await recv(conn)
+      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+      finished = parseOk(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
+      if finished:
+        break
+
+proc recvErrorPacket(conn: AsyncMysqlConnection): Future[void] {.async.} =
+  var finished = false
+  if conn.parser.buffered:
+    finished = parseError(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
+  if not finished:  
+    while true:
+      await recv(conn)
+      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+      finished = parseError(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
+      if finished:
+        break
+
+proc recvFieldsPacket(conn: AsyncMysqlConnection): Future[void] {.async.} =
+  var finished = false
+  if conn.parser.buffered:
+    finished = parseFields(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
+  if not finished:  
+    while true:
+      await recv(conn)
+      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+      finished = parseFields(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
+      if finished:
+        break
+
+proc recvRows(conn: AsyncMysqlConnection): Future[seq[string]] {.async.} =
+  assert conn.resultPacket.hasRows == true
+  var rows = initRowList()
+  var finished = false
+  if conn.parser.buffered:
+    finished = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, rows)
+  if not finished:  
+    while true:
+      await recv(conn)
+      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+      finished = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, rows)
+      if finished:
+        break
+  shallowCopy(result, rows.value)
 
 proc handshake(
   conn: AsyncMysqlConnection, 
@@ -95,17 +137,18 @@ proc handshake(
   capabilities: int
 ): Future[void] {.async.} =
   await connect(conn.socket, host, port)
-  conn.parser = initPacketParser()
+  conn.parser = initPacketParser(ppkHandshake)
   while true:
     await recv(conn)
-    parse(conn.parser, conn.handshakePacket, conn.buf[conn.bufPos].addr, MysqlBufSize)
-    inc(conn.bufPos, conn.parser.offset)
-    dec(conn.bufLen, conn.parser.offset)
-    if conn.parser.finished:
+    mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+    let finished = parseHandshake(conn.parser, conn.handshakePacket)
+    if finished:
       break
+  inc(conn.bufPos, conn.parser.offset)
+  dec(conn.bufLen, conn.parser.offset)
   await send(
     conn.socket, 
-    format(
+    formatClientAuth(
       ClientAuthenticationPacket(
         sequenceId: conn.handshakePacket.sequenceId + 1, 
         capabilities: capabilities, # 521167
@@ -116,9 +159,18 @@ proc handshake(
         database: database,
         protocol41: conn.handshakePacket.protocol41), 
     password))
-  var packet = await recvResultPacket(conn)
-  if packet.kind == rpkError:
-    raiseMysqlError(packet.errorMessage)
+  conn.parser = initPacketParser(ppkHandshake) 
+  await recvResultHeader(conn)
+  case conn.resultPacket.kind
+  of rpkOk:
+    await recvOkPacket(conn)
+  of rpkError:
+    await recvErrorPacket(conn)
+    raiseMysqlError(conn.resultPacket.errorMessage)
+  of rpkResultSet:
+    raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
+  inc(conn.bufPos, conn.parser.offset)
+  dec(conn.bufLen, conn.parser.offset)
 
 proc open*(
   domain: Domain = AF_INET, 
@@ -150,14 +202,27 @@ proc newQueryStream(conn: AsyncMysqlConnection): QueryStream =
   result.conn = conn
   result.finished = false
 
-proc read*(stream: QueryStream): Future[ResultPacket] {.async.} =
+proc read*(stream: QueryStream): Future[tuple[packet: ResultPacket, rows: seq[string]]] {.async.} =
   ## Reads a packet from ``stream`` step by step.
   template conn: untyped = stream.conn
   if stream.finished:
     return
   else:
-    result = await recvResultPacket(conn, COM_QUERY)
-    if not result.hasMoreResults:
+    conn.parser = initPacketParser(COM_QUERY) 
+    await recvResultHeader(conn)
+    case conn.resultPacket.kind
+    of rpkOk:
+      await recvOkPacket(conn)
+    of rpkError:
+      await recvErrorPacket(conn)
+    of rpkResultSet:
+      await recvFieldsPacket(conn)
+      if conn.resultPacket.hasRows:
+        result.rows = await recvRows(conn)
+    result.packet = conn.resultPacket # should copy the packet
+    inc(conn.bufPos, conn.parser.offset)
+    dec(conn.bufLen, conn.parser.offset)
+    if not result.packet.hasMoreResults:
       stream.finished = true
 
 proc finished*(stream: QueryStream): bool =
@@ -169,10 +234,24 @@ proc execQuery*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.
   await send(conn.socket, formatComQuery(string(q)))
   result = newQueryStream(conn)
   
-proc execQueryOne*(conn: AsyncMysqlConnection, q: SqlQuery): Future[ResultPacket] {.async.} =
+proc execQueryOne*(conn: AsyncMysqlConnection, q: SqlQuery): 
+                  Future[tuple[packet: ResultPacket, rows: seq[string]]] {.async.} =
   ## Executes the SQL statement. ``q`` should be a single statement.
   await send(conn.socket, formatComQuery(string(q)))
-  result = await recvResultPacket(conn, COM_QUERY)    
+  conn.parser = initPacketParser(COM_QUERY) 
+  await recvResultHeader(conn)
+  case conn.resultPacket.kind
+  of rpkOk:
+    await recvOkPacket(conn)
+  of rpkError:
+    await recvErrorPacket(conn)
+  of rpkResultSet:
+    await recvFieldsPacket(conn)
+    if conn.resultPacket.hasRows:
+      result.rows = await recvRows(conn)
+  result.packet = conn.resultPacket # should copy the packet
+  inc(conn.bufPos, conn.parser.offset)
+  dec(conn.bufLen, conn.parser.offset)
 
 proc execQuit*(conn: AsyncMysqlConnection): Future[void] {.async.} =
   ## Notifies the mysql server that the connection is disconnected. Attempting to request
@@ -186,7 +265,18 @@ proc execInitDb*(conn: AsyncMysqlConnection, database: string): Future[ResultPac
   ##
   ## Equivalent to ``use <database>;``
   await send(conn.socket, formatComInitDb(database))
-  result = await recvResultPacket(conn, COM_INIT_DB) 
+  conn.parser = initPacketParser(COM_INIT_DB) 
+  await recvResultHeader(conn)
+  case conn.resultPacket.kind
+  of rpkOk:
+    await recvOkPacket(conn)
+  of rpkError:
+    await recvErrorPacket(conn)
+  of rpkResultSet:
+    raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
+  result = conn.resultPacket
+  inc(conn.bufPos, conn.parser.offset)
+  dec(conn.bufLen, conn.parser.offset)
 
 proc execChangeUser*(conn: AsyncMysqlConnection, user: string, password: string, database: string, 
                      charset = DefaultClientCharset): Future[ResultPacket] {.async.} =
@@ -200,10 +290,32 @@ proc execChangeUser*(conn: AsyncMysqlConnection, user: string, password: string,
       scrambleBuff: conn.handshakePacket.scrambleBuff,
       database: database,
       charset: charset), password))
-  result = await recvResultPacket(conn, COM_INIT_DB) 
+  conn.parser = initPacketParser(COM_CHANGE_USER) 
+  await recvResultHeader(conn)
+  case conn.resultPacket.kind
+  of rpkOk:
+    await recvOkPacket(conn)
+  of rpkError:
+    await recvErrorPacket(conn)
+  of rpkResultSet:
+    raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
+  result = conn.resultPacket
+  inc(conn.bufPos, conn.parser.offset)
+  dec(conn.bufLen, conn.parser.offset)
 
 proc execPing*(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
   ## Checks whether the connection to the server is working. 
   await send(conn.socket, formatComPing())
-  result = await recvResultPacket(conn, COM_PING)    
+  conn.parser = initPacketParser(COM_PING) 
+  await recvResultHeader(conn)
+  case conn.resultPacket.kind
+  of rpkOk:
+    await recvOkPacket(conn)
+  of rpkError:
+    await recvErrorPacket(conn)
+  of rpkResultSet:
+    raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
+  result = conn.resultPacket  
+  inc(conn.bufPos, conn.parser.offset)
+  dec(conn.bufLen, conn.parser.offset)
 

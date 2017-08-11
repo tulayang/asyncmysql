@@ -499,7 +499,7 @@ string[NUL]    auth-plugin name
   }
 ]#
   PacketParserKind* = enum ## Kinds of ``PacketParser``.
-    ppkHandshake, ppkCommand
+    ppkHandshake, ppkCommandResult 
 
   PacketParser* = object ## Parser that is used to parse a Mysql Client/Server Protocol packet.
     buf: pointer
@@ -519,7 +519,7 @@ string[NUL]    auth-plugin name
     case kind: PacketParserKind
     of ppkHandshake:
       discard
-    of ppkCommand:
+    of ppkCommandResult:
       command: ServerCommand 
     isEntire: bool
 
@@ -530,7 +530,7 @@ string[NUL]    auth-plugin name
     prgOk, prgNext, prgEmpty
 
   PacketState = enum # Parsing state of the ``PacketParser``.
-    packInitialization, 
+    packInit, 
     packHeader, 
     packFinish, 
     packHandshake, 
@@ -541,11 +541,20 @@ string[NUL]    auth-plugin name
     packResultSetRows
 
   HandshakeState = enum # Parse state for handshaking.
-    hssProtocolVersion, hssServerVersion, hssThreadId, 
-    hssScrambleBuff1,   hssFiller0,       hssCapabilities1, 
-    hssCharSet,         hssStatus,        hssCapabilities2, 
-    hssFiller1,         hssFiller2,       hssScrambleBuff2, 
-    hssFiller3,         hssPlugin
+    hssProtocolVersion, 
+    hssServerVersion, 
+    hssThreadId, 
+    hssScrambleBuff1,   
+    hssFiller0,       
+    hssCapabilities1, 
+    hssCharSet,         
+    hssStatus,        
+    hssCapabilities2, 
+    hssFiller1,         
+    hssFiller2,       
+    hssScrambleBuff2, 
+    hssFiller3,         
+    hssPlugin
 
   HandshakePacket* = object       
     ## Packet from mysql server when connecting to the server that requires authentication.
@@ -567,7 +576,9 @@ string[NUL]    auth-plugin name
     state: HandshakeState
 
   EofState = enum
-    eofHeader, eofWarningCount, eofServerStatus
+    eofHeader, 
+    eofWarningCount, 
+    eofServerStatus
 
   EofPacket* = object
     warningCount*: int
@@ -578,18 +589,34 @@ string[NUL]    auth-plugin name
     rpkOk, rpkError, rpkResultSet  
 
   OkState = enum
-    okAffectedRows, okLastInsertId, okServerStatus, 
-    okWarningCount, okStatusInfo,   okSessionState
+    okAffectedRows, 
+    okLastInsertId, 
+    okServerStatus, 
+    okWarningCount, 
+    okStatusInfo,   
+    okSessionState
 
   ErrorState = enum
-    errErrorCode, errSqlState, errSqlStateMarker, errErrorMessage
+    errErrorCode, 
+    errSqlState, 
+    errSqlStateMarker, 
+    errErrorMessage
 
   FieldState = enum
-    fieldCatalog,    fieldSchema,      fieldTable,       
-    fieldOrgTable,   fieldName,        fieldOrgName,
-    fieldFiller1,    fieldCharset,     fieldLen,   
-    fieldType,       fieldFlags,       fieldDecimals,    
-    fieldFiller2,    fieldDefaultValue
+    fieldCatalog,    
+    fieldSchema,      
+    fieldTable,       
+    fieldOrgTable,   
+    fieldName,        
+    fieldOrgName,
+    fieldFiller1,    
+    fieldCharset,     
+    fieldLen,   
+    fieldType,       
+    fieldFlags,       
+    fieldDecimals,    
+    fieldFiller2,    
+    fieldDefaultValue
 
   FieldPacket* = object 
     catalog*: string
@@ -607,10 +634,20 @@ string[NUL]    auth-plugin name
     state: FieldState
 
   ResultSetState = enum
-    rsetExtra, rsetFieldHeader, rsetField, rsetFieldEof, rsetRowHeader, rsetRow, rsetRowEof
+    rsetExtra, 
+    rsetFieldHeader, 
+    rsetField, 
+    rsetFieldEof, 
+    rsetRowHeader, 
+    rsetRow, 
+    rsetRowEof
 
   RowState* = enum
-    rowFieldBegin, rowFieldBufFull, rowFieldEnd, rowBufEmpty, rowFinished
+    rowFieldBegin,
+    rowFieldBufFull,
+    rowFieldEnd,
+    rowBufEmpty,
+    rowFinished
 
   ResultPacket* = object ## The result packet object.
     sequenceId*: int           
@@ -631,7 +668,6 @@ string[NUL]    auth-plugin name
       errState: ErrorState
     of rpkResultSet:
       extra*: string
-      fieldsCount*: int
       fieldsPos: int
       fields*: seq[FieldPacket]
       fieldsEof: EofPacket
@@ -640,6 +676,10 @@ string[NUL]    auth-plugin name
       hasRows*: bool
       meetNull: bool
     hasMoreResults*: bool
+
+  RowList* = object
+    value*: seq[string]
+    counter: int
 
 proc initHandshakePacket(): HandshakePacket =
   result.sequenceId = 0
@@ -698,7 +738,6 @@ proc initResultPacket(kind: ResultPacketKind): ResultPacket =
     result.errState = errErrorCode
   of rpkResultSet:
     result.extra = ""
-    result.fieldsCount = 0
     result.fieldsPos = 0
     result.fields = @[]
     result.fieldsEof = initEofPacket()
@@ -708,8 +747,11 @@ proc initResultPacket(kind: ResultPacketKind): ResultPacket =
     result.meetNull = false
   result.hasMoreResults = false
 
+proc initRowList*(): RowList =
+  result.value = @[]
+  result.counter = -1
+
 template initPacketParserImpl() = 
-  ## TODO: opmitize buffer
   result.buf = nil
   result.bufLen = 0
   result.bufPos = 0
@@ -721,20 +763,20 @@ template initPacketParserImpl() =
   result.remainingPayloadLen = 0
   result.storedWord = nil
   result.storedWant = 0
-  result.storedState = packInitialization
-  result.state = packInitialization
+  result.storedState = packInit
+  result.state = packInit
   result.wantEncodedState = lenFlagVal
-  result.isEntire = true #TODO
+  result.isEntire = true 
 
-proc initPacketParser*(): PacketParser = 
+proc initPacketParser*(kind: PacketParserKind): PacketParser = 
   ## Creates a new packet parser for parsing a handshake connection.
   initPacketParserImpl
-  result.kind = ppkHandshake
+  result.kind = kind
 
 proc initPacketParser*(command: ServerCommand): PacketParser = 
   ## Creates a new packet parser for receiving a result packet.
   initPacketParserImpl
-  result.kind = ppkCommand
+  result.kind = ppkCommandResult
   result.command = command
   
 proc finished*(p: PacketParser): bool =
@@ -756,7 +798,7 @@ proc mount*(p: var PacketParser, buf: pointer, size: int) =
   p.buf = buf
   p.bufLen = size
   p.bufPos = 0
-  if p.state != packInitialization and p.state != packHeader:
+  if p.state != packInit and p.state != packHeader:
     p.bufRealLen = if p.remainingPayloadLen <= size: p.remainingPayloadLen
                    else: size
 
@@ -793,7 +835,7 @@ proc parseHeader(p: var PacketParser): ProgressState =
   p.state = p.storedState
   p.want = p.storedWant
   p.word = p.storedWord
-  p.storedState = packInitialization
+  p.storedState = packInit
 
 proc checkIfMove(p: var PacketParser): ProgressState =
   assert p.bufRealLen == 0
@@ -1043,7 +1085,7 @@ proc parseHandshake*(p: var PacketParser, packet: var HandshakePacket): bool =
   ## If parsing is complete, ``p``.``finished`` will be ``true``.
   while true:
     case p.state
-    of packInitialization:
+    of packInit:
       packet = initHandshakePacket()
       p.state = packHandshake
       p.want = 1
@@ -1063,7 +1105,7 @@ proc parseResultHeader*(p: var PacketParser, packet: var ResultPacket): bool =
   ## If parsing is complete, ``p``.``finished`` will be ``true``.
   while true:
     case p.state
-    of packInitialization:
+    of packInit:
       p.state = packResultHeader
       p.want = 1
       move(p)
@@ -1085,7 +1127,6 @@ proc parseResultHeader*(p: var PacketParser, packet: var ResultPacket): bool =
         p.wantEncodedState = lenFlagVal
       else:
         packet = initResultPacket(rpkResultSet)
-        packet.fieldsCount = header
         p.state = packResultSetFields
         p.want = p.remainingPayloadLen
     of packResultOk, packResultError, packResultSetFields:
@@ -1348,6 +1389,7 @@ proc parseFields*(p: var PacketParser, packet: var ResultPacket, capabilities: i
         of rsetFieldEof:
           checkIfOk parseEofProgress(p, packet.fieldsEof, capabilities) 
           if p.command == COM_FIELD_LIST:
+            packet.hasMoreResults = (packet.fieldsEof.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
             packet.sequenceId = p.sequenceId
             packet.hasRows = false
             p.state = packFinish
@@ -1411,7 +1453,7 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
           if packet.meetNull:
             assert size > 0
             packet.meetNull = false
-            cast[ptr char](buf)[] = '\0' # NULL 
+            cast[ptr char](buf)[] = '\0' # NULL ==> '\0' 
             packet.rsetState = rsetRowHeader
             p.want = 1
             p.wantEncodedState = lenFlagVal 
@@ -1446,7 +1488,7 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
       raise newException(ValueError, "unexpected state " & $p.state)
 
 proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int, 
-                buf: var string): RowState =
+                rows: var RowList): bool =
   template checkIfOk(state: ProgressState): untyped =
     case state
     of prgOk:
@@ -1454,18 +1496,11 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
     of prgNext:
       break
     of prgEmpty:
-      return rowBufEmpty
+      return false
   while true:
     case p.state
     of packHeader:
-      let prgState = parseHeader(p)
-      case prgState
-      of prgOk:
-        discard
-      of prgNext:
-        continue
-      of prgEmpty:
-        return rowBufEmpty
+      checkPrg parseHeader(p)
     of packResultSetRows:
       while true:
         case packet.rsetState
@@ -1478,24 +1513,25 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
           elif header == 0xFB:
             packet.rsetState = rsetRow
             packet.meetNull = true
-            return rowFieldBegin
+            inc(rows.counter)
+            add(rows.value, newStringOfCap(1))
           else:
             packet.rsetState = rsetRow
             p.want = header
+            inc(rows.counter)
+            add(rows.value, newStringOfCap(header))
         of rsetRow:
           if packet.meetNull:
             packet.meetNull = false
-            buf = nil # NULL 
+            rows.value[rows.counter] = nil # NULL ==> nil
             packet.rsetState = rsetRowHeader
             p.want = 1
             p.wantEncodedState = lenFlagVal 
-            return rowFieldEnd
           else: 
-            checkIfOk parseFixed(p, buf)
+            checkIfOk parseFixed(p, rows.value[rows.counter])
             packet.rsetState = rsetRowHeader
             p.want = 1
             p.wantEncodedState = lenFlagVal 
-            return rowFieldEnd
         of rsetRowEof:
           checkIfOk parseEofProgress(p, packet.rowsEof, capabilities)
           packet.hasMoreResults = (packet.rowsEof.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
@@ -1505,7 +1541,7 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
         else:
           raise newException(ValueError, "unexpected state " & $packet.rsetState) 
     of packFinish:
-      return rowFinished
+      return true
     else:
       raise newException(ValueError, "unexpected state " & $p.state)
 
@@ -1602,7 +1638,7 @@ proc scramble323(seed: string, password: string): string =
   for i in 0..<seed.len:
     result[i] = chr(ord(result[i]) xor b.int)
 
-proc format*(packet: ClientAuthenticationPacket, password: string): string = 
+proc formatClientAuth*(packet: ClientAuthenticationPacket, password: string): string = 
   ## Converts ``packet`` to a string.
   if packet.protocol41:
     let payloadLen = 4 + 4 + 1 + 23 + (packet.user.len + 1) + (1 + 20) + 
