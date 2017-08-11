@@ -2,11 +2,11 @@
 
 ## Features
 
-* single SQL statement in one query
-* multiple SQL statements in one query
-* big data query via streaming oprations (TODO)
+* single SQL statement in a query
+* multiple SQL statements in a query
+* streaming query for big result set
 * connection pool (TODO)
-* an incremental (MySQL protocol) packet parser which is independent from IO tools zzzzzz
+* an incremental (MySQL protocol) packet parser which is independent from IO tools
 
 ### Query with a single statement:
 
@@ -21,10 +21,11 @@ proc main() {.async.} =
                         password = "123456", 
                         database = "mysql")
                         
-  var packet = await conn.execQueryOne(
+  var (packet, rows) = await conn.execQueryOne(
       sql("select host, user from user where user = ?", "root")) 
   echo ">>> select host, user from user where user = root"
   echo packet
+  echo rows
 
 waitFor main()
 ```
@@ -49,28 +50,30 @@ select user from user;
 commit;
 """, "root"))
 
-  let packet0 = await stream.read()
+  let (packet0, _) = await stream.read()
   echo ">>> strart transaction;"
   echo packet0
   assert stream.finished == false
   assert packet0.kind == rpkOk
   assert packet0.hasMoreResults == true
 
-  let packet1 = await stream.read()
+  let (packet1, rows1) = await stream.read()
   echo ">>> select host, user from user where user = ?;"
   echo packet1
+  echo rows
   assert stream.finished == false
   assert packet1.kind == rpkResultSet
   assert packet1.hasMoreResults == true
 
-  let packet2 = await stream.read()
+  let (packet2, rows2) = await stream.read()
   echo ">>> select user from user;"
   echo packet2
+  echo rows2
   assert stream.finished == false
   assert packet2.kind == rpkResultSet
   assert packet2.hasMoreResults == true
 
-  let packet3 = await stream.read()
+  let (packet3, _) = await stream.read()
   echo ">>> commit;"
   echo packet3
   assert stream.finished == true
@@ -84,8 +87,9 @@ waitFor main()
 
 Currently, the packet parser has been completed. The ``PacketParser`` is an excellent incremental parser which is not limited by the size of the buffer. For example, using a buffer of 16 bytes buffer to request the mysql server.
 
-* big data query via streaming oprations
 * connection pool
 * API Documentation
+
+
 
 
