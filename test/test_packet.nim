@@ -279,27 +279,27 @@ suite "Command Queury":
         var rowsPos = -1
         var fieldBuf = newString(1024)
         var offset = 0
-        var rowState = rowFieldBegin
+        var rowState = rowsFieldBegin
         if parser.buffered:
           while true:
             (offset, rowState) = parseRows(parser, packet, handshakePacket.capabilities, fieldBuf.cstring, 1024)
             case rowState
-            of rowFieldBegin:
+            of rowsFieldBegin:
               inc(rowsPos)
               add(rows, "")
-            of rowFieldBufFull:
+            of rowsFieldFull:
               check offset == 1024
               add(rows[rowsPos], fieldBuf[0..offset-1])
-            of rowFieldEnd:
+            of rowsFieldEnd:
               check offset > 0
               add(rows[rowsPos], fieldBuf[0..offset-1])
-            of rowBufEmpty:
+            of rowsBufEmpty:
               if offset > 0:
                 add(rows[rowsPos], fieldBuf[0..offset-1])
               break
-            of rowFinished:
+            of rowsFinished:
               break
-        if rowState != rowFinished:
+        if rowState != rowsFinished:
           block parsing:
             while true:
               let buf = await recv(socket, 3)
@@ -308,20 +308,20 @@ suite "Command Queury":
               while true:
                 (offset, rowState) = parseRows(parser, packet, handshakePacket.capabilities, fieldBuf.cstring, 1024)
                 case rowState 
-                of rowFieldBegin:
+                of rowsFieldBegin:
                   inc(rowsPos)
                   add(rows, "")
-                of rowFieldBufFull:
+                of rowsFieldFull:
                   check offset == 1024
                   add(rows[rowsPos], fieldBuf[0..offset-1])
-                of rowFieldEnd:
+                of rowsFieldEnd:
                   check offset > 0
                   add(rows[rowsPos], fieldBuf[0..offset-1])
-                of rowBufEmpty:
+                of rowsBufEmpty:
                   if offset > 0:
                     add(rows[rowsPos], fieldBuf[0..offset-1])
                   break
-                of rowFinished:
+                of rowsFinished:
                   break parsing
         echo "  ResultSet Packet: ", packet
         echo "  ResultSet Rows: ", rows

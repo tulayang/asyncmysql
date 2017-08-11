@@ -86,9 +86,35 @@ select 10;
   test "query singly":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let (packet, _) = await execQueryOne(conn, sql("select 100"))
+      let (packet, rows) = await execQueryOne(conn, sql("select 100"))
       echo "  >>> select 100;"
       echo "  ", packet
+      echo "  ", rows
+      check packet.kind == rpkResultSet
+      check packet.hasMoreResults == false
+      close(conn)
+    waitFor1 sendComQuery() 
+
+  test "query big singly":
+    proc sendComQuery() {.async.} =
+      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let (packet, stream) = await execQueryBigOne(conn, sql("select 100"))
+      var rows: seq[string] = @[]
+      var buf = newString(16)
+      while true:
+        let (offset, state) = await read(stream, buf.cstring, buf.len)
+        case state
+        of bigFieldBegin:
+          setLen(buf, 16)
+        of bigFieldFull:
+          check false
+        of bigFieldEnd:
+          add(rows, buf[0..offset-1])
+        of bigFinished:
+          break
+      echo "  >>> select 100;"
+      echo "  ", packet
+      echo "  ", rows
       check packet.kind == rpkResultSet
       check packet.hasMoreResults == false
       close(conn)

@@ -40,6 +40,16 @@ type
     conn: AsyncMysqlConnection
     finished: bool
 
+  BigResultStream* = ref object
+    conn: AsyncMysqlConnection
+    state: BigResultState
+
+  BigResultState* = enum
+    bigFieldBegin,
+    bigFieldFull,
+    bigFieldEnd,
+    bigFinished
+
 var DEBUG_data = ""
 var DEBUG_index = 0
 proc DEBUG(conn: AsyncMysqlConnection) =
@@ -229,6 +239,62 @@ proc finished*(stream: QueryStream): bool =
   ## Determines whether ``stream`` has completed.
   result = stream.finished
   
+proc newBigResultStream(conn: AsyncMysqlConnection): BigResultStream =
+  new(result)
+  result.conn = conn
+  result.state = bigFieldBegin
+
+proc read*(stream: BigResultStream, buf: pointer, size: int): Future[tuple[offset: int, state: BigResultState]] {.async.} =
+  ## Reads a packet from ``stream`` step by step.
+  template conn: untyped = stream.conn
+  if stream.state == bigFinished:
+    return (0, bigFinished)
+  else:
+    var bufPos = 0  
+    if conn.parser.buffered:
+      let (offset, state) = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, buf, size)
+      if state != rowsBufEmpty:
+        case state
+        of rowsFieldBegin:
+          result.state = bigFieldBegin
+        of rowsFieldFull:
+          result.state = bigFieldFull
+        of rowsFieldEnd:
+          result.state = bigFieldEnd
+        of rowsFinished:
+          result.state = bigFinished
+          inc(conn.bufPos, conn.parser.offset)
+          dec(conn.bufLen, conn.parser.offset)
+        of rowsBufEmpty:
+          discard
+        result.offset = offset
+        stream.state = result.state
+        return
+      inc(bufPos, offset)
+    while true:
+      await recv(conn)
+      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+      let (offset, state) = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, 
+          cast[pointer](cast[ByteAddress](buf) + bufPos * sizeof(char)), size - bufPos)
+      if state != rowsBufEmpty:
+        case state
+        of rowsFieldBegin:
+          result.state = bigFieldBegin
+        of rowsFieldFull:
+          result.state = bigFieldFull
+        of rowsFieldEnd:
+          result.state = bigFieldEnd
+        of rowsFinished:
+          result.state = bigFinished
+          inc(conn.bufPos, conn.parser.offset)
+          dec(conn.bufLen, conn.parser.offset)
+        of rowsBufEmpty:
+          discard
+        result.offset = offset
+        stream.state = result.state
+        return
+      inc(bufPos, offset)
+
 proc execQuery*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.async.} =
   ## Executes the SQL statements. ``q`` can be a single statement or multiple statements.
   await send(conn.socket, formatComQuery(string(q)))
@@ -252,6 +318,25 @@ proc execQueryOne*(conn: AsyncMysqlConnection, q: SqlQuery):
   result.packet = conn.resultPacket # should copy the packet
   inc(conn.bufPos, conn.parser.offset)
   dec(conn.bufLen, conn.parser.offset)
+
+proc execQueryBigOne*(conn: AsyncMysqlConnection, q: SqlQuery): 
+                      Future[tuple[packet: ResultPacket, stream: BigResultStream]] {.async.} =
+  ## Executes the SQL statement. ``q`` should be a single statement.
+  await send(conn.socket, formatComQuery(string(q)))
+  conn.parser = initPacketParser(COM_QUERY) 
+  await recvResultHeader(conn)
+  case conn.resultPacket.kind
+  of rpkOk:
+    await recvOkPacket(conn)
+  of rpkError:
+    await recvErrorPacket(conn)
+  of rpkResultSet:
+    await recvFieldsPacket(conn)
+    if conn.resultPacket.hasRows:
+      result.stream = newBigResultStream(conn)
+  result.packet = conn.resultPacket # should copy the packet
+  inc(conn.bufPos, conn.parser.offset)
+  dec(conn.bufLen, conn.parser.offset) # TODO 
 
 proc execQuit*(conn: AsyncMysqlConnection): Future[void] {.async.} =
   ## Notifies the mysql server that the connection is disconnected. Attempting to request

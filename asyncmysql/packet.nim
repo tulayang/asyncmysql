@@ -642,12 +642,12 @@ string[NUL]    auth-plugin name
     rsetRow, 
     rsetRowEof
 
-  RowState* = enum
-    rowFieldBegin,
-    rowFieldBufFull,
-    rowFieldEnd,
-    rowBufEmpty,
-    rowFinished
+  RowsState* = enum
+    rowsFieldBegin,
+    rowsFieldFull,
+    rowsFieldEnd,
+    rowsBufEmpty,
+    rowsFinished
 
   ResultPacket* = object ## The result packet object.
     sequenceId*: int           
@@ -1411,7 +1411,7 @@ proc parseFields*(p: var PacketParser, packet: var ResultPacket, capabilities: i
       raise newException(ValueError, "unexpected state " & $p.state) 
 
 proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int, 
-                buf: pointer, size: int): tuple[offset: int, state: RowState] =
+                buf: pointer, size: int): tuple[offset: int, state: RowsState] =
   template checkIfOk(state: ProgressState): untyped =
     case state
     of prgOk:
@@ -1419,7 +1419,7 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
     of prgNext:
       break
     of prgEmpty:
-      return (0, rowBufEmpty)
+      return (0, rowsBufEmpty)
   while true:
     case p.state
     of packHeader:
@@ -1430,7 +1430,7 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
       of prgNext:
         continue
       of prgEmpty:
-        return (0, rowBufEmpty)
+        return (0, rowsBufEmpty)
     of packResultSetRows:
       while true:
         case packet.rsetState
@@ -1443,12 +1443,12 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
           elif header == 0xFB:
             packet.rsetState = rsetRow
             packet.meetNull = true
-            return (0, rowFieldBegin)
+            return (0, rowsFieldBegin)
           else:
             packet.rsetState = rsetRow
             p.want = header
             assert p.want > 0
-            return (0, rowFieldBegin)
+            return (0, rowsFieldBegin)
         of rsetRow:
           if packet.meetNull:
             assert size > 0
@@ -1457,23 +1457,23 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
             packet.rsetState = rsetRowHeader
             p.want = 1
             p.wantEncodedState = lenFlagVal 
-            return (1, rowFieldEnd)
+            return (1, rowsFieldEnd)
           else:  
             let w = p.want
             let (prgState, full) = parseFixed(p, buf, size)
             let offset = w - p.want
             if full:
-              return (offset, rowFieldBufFull)
+              return (offset, rowsFieldFull)
             case prgState
             of prgOk:
               packet.rsetState = rsetRowHeader
               p.want = 1
               p.wantEncodedState = lenFlagVal 
-              return (offset, rowFieldEnd)
+              return (offset, rowsFieldEnd)
             of prgNext:
               break
             of prgEmpty:
-              return (offset, rowBufEmpty)
+              return (offset, rowsBufEmpty)
         of rsetRowEof:
           checkIfOk parseEofProgress(p, packet.rowsEof, capabilities)
           packet.hasMoreResults = (packet.rowsEof.serverStatus and SERVER_MORE_RESULTS_EXISTS) > 0
@@ -1483,7 +1483,7 @@ proc parseRows*(p: var PacketParser, packet: var ResultPacket, capabilities: int
         else:
           raise newException(ValueError, "unexpected state " & $packet.rsetState) 
     of packFinish:
-      return (0, rowFinished)
+      return (0, rowsFinished)
     else:
       raise newException(ValueError, "unexpected state " & $p.state)
 
