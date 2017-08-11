@@ -7,9 +7,9 @@
 
 - add single statement query             [OK]
 
-- add streaming recv for big resultset
+- add streaming recv for big resultset   [OK]
 
-- add streaming send for big data
+- add streaming send for big data        
 
 - add other cmd query                    [OK]
 
@@ -23,4 +23,5 @@
 
 
 
-- optimize parse buffer                  [Now]
+- optimize parse buffer                  [OK]
+- add query queue                        [Now]

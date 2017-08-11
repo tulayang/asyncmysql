@@ -50,24 +50,26 @@ type
     bigFieldEnd,
     bigFinished
 
-var DEBUG_data = ""
-var DEBUG_index = 0
-proc DEBUG(conn: AsyncMysqlConnection) =
-  for c in conn.bufPos..<conn.bufPos+conn.bufLen:
-    DEBUG_data.add(conn.buf[c].ord.toHex(2))
-    DEBUG_data.add("  ")
-    inc(DEBUG_index)
-    if DEBUG_index == 10:
-      DEBUG_data.add('\L')
-      DEBUG_index = 0
-  writeFile("/home/king/App/app/asyncmysql/test/log", DEBUG_data)  
-  DEBUG_data = ""
-  DEBUG_index = 0
+when defined(asyncmysqlDebug):
+  var debug_data = ""
+  var debug_index = 0
+  proc debugLog(conn: AsyncMysqlConnection) =
+    for c in conn.bufPos..<conn.bufPos+conn.bufLen:
+      debug_data.add(conn.buf[c].ord.toHex(2))
+      debug_data.add("  ")
+      inc(debug_index)
+      if debug_index == 10:
+        debug_data.add('\L')
+        debug_index = 0
+    writeFile("test/log", debug_data)  
+    debug_data = ""
+    debug_index = 0
 
 proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
   conn.bufPos = 0
   conn.bufLen = await recvInto(conn.socket, conn.buf[0].addr, MysqlBufSize)
-  #DEBUG(conn)
+  when defined(asyncmysqlDebug):
+    debugLog(conn)
   if conn.bufLen == 0:
     raiseMysqlError("peer disconnected unexpectedly")
 
@@ -84,7 +86,7 @@ proc recvResultHeader(conn: AsyncMysqlConnection): Future[void] {.async.} =
       if finished:
         break
 
-proc recvOkPacket(conn: AsyncMysqlConnection): Future[void] {.async.} =
+proc recvOk(conn: AsyncMysqlConnection): Future[void] {.async.} =
   var finished = false
   if conn.parser.buffered:
     finished = parseOk(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
@@ -96,7 +98,7 @@ proc recvOkPacket(conn: AsyncMysqlConnection): Future[void] {.async.} =
       if finished:
         break
 
-proc recvErrorPacket(conn: AsyncMysqlConnection): Future[void] {.async.} =
+proc recvError(conn: AsyncMysqlConnection): Future[void] {.async.} =
   var finished = false
   if conn.parser.buffered:
     finished = parseError(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
@@ -108,7 +110,7 @@ proc recvErrorPacket(conn: AsyncMysqlConnection): Future[void] {.async.} =
       if finished:
         break
 
-proc recvFieldsPacket(conn: AsyncMysqlConnection): Future[void] {.async.} =
+proc recvFields(conn: AsyncMysqlConnection): Future[void] {.async.} =
   var finished = false
   if conn.parser.buffered:
     finished = parseFields(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
@@ -173,9 +175,9 @@ proc handshake(
   await recvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    await recvOkPacket(conn)
+    await recvOk(conn)
   of rpkError:
-    await recvErrorPacket(conn)
+    await recvError(conn)
     raiseMysqlError(conn.resultPacket.errorMessage)
   of rpkResultSet:
     raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
@@ -222,11 +224,11 @@ proc read*(stream: QueryStream): Future[tuple[packet: ResultPacket, rows: seq[st
     await recvResultHeader(conn)
     case conn.resultPacket.kind
     of rpkOk:
-      await recvOkPacket(conn)
+      await recvOk(conn)
     of rpkError:
-      await recvErrorPacket(conn)
+      await recvError(conn)
     of rpkResultSet:
-      await recvFieldsPacket(conn)
+      await recvFields(conn)
       if conn.resultPacket.hasRows:
         result.rows = await recvRows(conn)
     result.packet = conn.resultPacket # should copy the packet
@@ -245,7 +247,7 @@ proc newBigResultStream(conn: AsyncMysqlConnection): BigResultStream =
   result.state = bigFieldBegin
 
 proc read*(stream: BigResultStream, buf: pointer, size: int): Future[tuple[offset: int, state: BigResultState]] {.async.} =
-  ## Reads a packet from ``stream`` step by step.
+  ## Reads rows of a big-one query.
   template conn: untyped = stream.conn
   if stream.state == bigFinished:
     return (0, bigFinished)
@@ -301,42 +303,46 @@ proc execQuery*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.
   result = newQueryStream(conn)
   
 proc execQueryOne*(conn: AsyncMysqlConnection, q: SqlQuery): 
-                  Future[tuple[packet: ResultPacket, rows: seq[string]]] {.async.} =
+    Future[tuple[packet: ResultPacket, rows: seq[string]]] {.async.} =
   ## Executes the SQL statement. ``q`` should be a single statement.
   await send(conn.socket, formatComQuery(string(q)))
   conn.parser = initPacketParser(COM_QUERY) 
   await recvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    await recvOkPacket(conn)
+    await recvOk(conn)
   of rpkError:
-    await recvErrorPacket(conn)
+    await recvError(conn)
   of rpkResultSet:
-    await recvFieldsPacket(conn)
+    await recvFields(conn)
     if conn.resultPacket.hasRows:
       result.rows = await recvRows(conn)
   result.packet = conn.resultPacket # should copy the packet
   inc(conn.bufPos, conn.parser.offset)
   dec(conn.bufLen, conn.parser.offset)
+  if conn.resultPacket.hasMoreResults:
+    raiseMysqlError("bad query, only one SQL statement is allowed")
 
 proc execQueryBigOne*(conn: AsyncMysqlConnection, q: SqlQuery): 
-                      Future[tuple[packet: ResultPacket, stream: BigResultStream]] {.async.} =
+    Future[tuple[packet: ResultPacket, stream: BigResultStream]] {.async.} =
   ## Executes the SQL statement. ``q`` should be a single statement.
   await send(conn.socket, formatComQuery(string(q)))
   conn.parser = initPacketParser(COM_QUERY) 
   await recvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    await recvOkPacket(conn)
+    await recvOk(conn)
   of rpkError:
-    await recvErrorPacket(conn)
+    await recvError(conn)
   of rpkResultSet:
-    await recvFieldsPacket(conn)
+    await recvFields(conn)
     if conn.resultPacket.hasRows:
       result.stream = newBigResultStream(conn)
   result.packet = conn.resultPacket # should copy the packet
   inc(conn.bufPos, conn.parser.offset)
-  dec(conn.bufLen, conn.parser.offset) # TODO 
+  dec(conn.bufLen, conn.parser.offset) 
+  if conn.resultPacket.hasMoreResults:
+    raiseMysqlError("bad query, only one SQL statement is allowed")
 
 proc execQuit*(conn: AsyncMysqlConnection): Future[void] {.async.} =
   ## Notifies the mysql server that the connection is disconnected. Attempting to request
@@ -354,9 +360,9 @@ proc execInitDb*(conn: AsyncMysqlConnection, database: string): Future[ResultPac
   await recvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    await recvOkPacket(conn)
+    await recvOk(conn)
   of rpkError:
-    await recvErrorPacket(conn)
+    await recvError(conn)
   of rpkResultSet:
     raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
   result = conn.resultPacket
@@ -379,9 +385,9 @@ proc execChangeUser*(conn: AsyncMysqlConnection, user: string, password: string,
   await recvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    await recvOkPacket(conn)
+    await recvOk(conn)
   of rpkError:
-    await recvErrorPacket(conn)
+    await recvError(conn)
   of rpkResultSet:
     raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
   result = conn.resultPacket
@@ -395,9 +401,9 @@ proc execPing*(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
   await recvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    await recvOkPacket(conn)
+    await recvOk(conn)
   of rpkError:
-    await recvErrorPacket(conn)
+    await recvError(conn)
   of rpkResultSet:
     raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
   result = conn.resultPacket  

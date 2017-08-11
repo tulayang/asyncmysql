@@ -13,7 +13,7 @@ const
   MysqlPassword = "123456"
 
 suite "AsyncMysqlConnection":
-  test "query multiply":
+  test "query multiple":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       var stream = await execQuery(conn, sql("""
@@ -57,7 +57,7 @@ commit;
       close(conn)
     waitFor1 sendComQuery() 
 
-  test "query multiply with bad results":
+  test "query multiple with bad results":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       var stream = await execQuery(conn, sql("""
@@ -83,7 +83,7 @@ select 10;
       close(conn)
     waitFor1 sendComQuery() 
 
-  test "query singly":
+  test "query one":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       let (packet, rows) = await execQueryOne(conn, sql("select 100"))
@@ -95,7 +95,7 @@ select 10;
       close(conn)
     waitFor1 sendComQuery() 
 
-  test "query big singly":
+  test "query big-one":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       let (packet, stream) = await execQueryBigOne(conn, sql("select 100"))
@@ -121,7 +121,7 @@ select 10;
     waitFor1 sendComQuery() 
 
   test "ping":
-    proc sendComQuery() {.async.} =
+    proc sendComPing() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       let packet = await execPing(conn)
       echo "  >>> ping;"
@@ -129,7 +129,7 @@ select 10;
       check packet.kind == rpkOk
       check packet.hasMoreResults == false
       close(conn)
-    waitFor1 sendComQuery()  
+    waitFor1 sendComPing()  
 
   test "use <database>":
     proc sendComQuery() {.async.} =
@@ -163,7 +163,7 @@ select 10;
     waitFor1 sendComQuery()   
 
   test "change user":
-    proc sendComQuery() {.async.} =
+    proc sendComChangeUser() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       let packet0 = await execChangeUser(conn, "mysql2", MysqlPassword, "mysql", DefaultClientCharset)
       echo "  >>> change user;"
@@ -171,12 +171,12 @@ select 10;
       check packet0.kind == rpkOk
       check packet0.hasMoreResults == false
       close(conn)
-    waitFor1 sendComQuery()   
+    waitFor1 sendComChangeUser()   
 
   test "quit":
-    proc sendComQuery() {.async.} =
+    proc sendComQuit() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuit(conn)
       close(conn)
-    waitFor1 sendComQuery()   
+    waitFor1 sendComQuit()   
 
