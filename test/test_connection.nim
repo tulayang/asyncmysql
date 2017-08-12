@@ -120,6 +120,50 @@ select 10;
       close(conn)
     waitFor1 sendComQuery() 
 
+  test "when there are multiple requests are at the same time, the requests are queued":
+    var conn: AsyncMysqlConnection
+
+    proc sendComQuery1() {.async.} =  
+      let (packet, rows) = await execQueryOne(conn, sql("select 100"))
+      echo "  >>> select 100;"
+      echo "  ", packet
+      echo "  ", rows
+      check packet.kind == rpkResultSet
+      check packet.hasMoreResults == false
+
+    proc sendComQuery2() {.async.} =
+      let (packet, rows) = await execQueryOne(conn, sql("select 200"))
+      echo "  >>> select 200;"
+      echo "  ", packet
+      echo "  ", rows
+      check packet.kind == rpkResultSet
+      check packet.hasMoreResults == false
+
+    proc doQueries(): Future[void] =
+      var retFuture = newFuture[void]("")
+      result = retFuture
+      var n = 2
+      var fut1 = sendComQuery1()
+      fut1.callback = proc () = 
+        dec(n)
+        if fut1.failed:
+          raise fut1.readError()
+        if n == 0:
+          complete(retFuture)
+      var fut2 = sendComQuery2()
+      fut2.callback = proc () = 
+        dec(n)
+        if fut2.failed:
+          raise fut2.readError()
+        if n == 0:
+          complete(retFuture)
+
+    proc sendComQuery() {.async.} =
+      conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      await doQueries()
+
+    waitFor1 sendComQuery() 
+
   test "ping":
     proc sendComPing() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
