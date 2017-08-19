@@ -4,7 +4,7 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import asyncdispatch, asyncnet, net, packet, error, query, strutils, deques
+import asyncdispatch, asyncnet, net, mysqlparser, error, query, strutils, deques
 
 const 
   MysqlBufSize* = 1024 ## Size of the internal buffer used by mysql connection.
