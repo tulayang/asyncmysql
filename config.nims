@@ -29,8 +29,7 @@ template runBenchmark(name: string) =
 task test, "Run test tests":
   runTest "test"
 
-task test_packet, "Run test packet tests":
-  runTest "test_packet"
-
 task test_connection, "Run test connection tests":
   runTest "test_connection"
+
+

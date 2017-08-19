@@ -85,10 +85,10 @@ waitFor main()
 
 ## TODO 
 
-Currently, the packet parser has been completed. The ``PacketParser`` is an excellent incremental parser which is not limited by the size of the buffer. For example, using a buffer of 16 bytes buffer to request the mysql server.
-
 * connection pool
 * API Documentation
+
+
 
 
 
