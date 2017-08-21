@@ -4,7 +4,7 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import unittest, asyncmysql, util, asyncdispatch, asyncnet, net
+import unittest, asyncmysql, util, mysqlparser, asyncdispatch, asyncnet, net
 
 const 
   MysqlHost = "127.0.0.1"

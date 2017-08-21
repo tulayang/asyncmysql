@@ -4,5 +4,5 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import asyncmysql.packet, asyncmysql.error, asyncmysql.query, asyncmysql.connection
-export asyncmysql.packet, asyncmysql.error, asyncmysql.query, asyncmysql.connection
+import asyncmysql.error, asyncmysql.query, asyncmysql.connection
+export asyncmysql.error, asyncmysql.query, asyncmysql.connection

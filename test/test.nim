@@ -4,4 +4,4 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import test_packet, test_connection
+import test_connection
