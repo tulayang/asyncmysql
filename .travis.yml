@@ -11,7 +11,7 @@ services:
 
 before_install:
   - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
-      brew install mysql;
+      HOMEBREW_NO_AUTO_UPDATE=1 brew install mysql;
       mysql.server start; 
     fi
   - mysql -h 127.0.0.1 -u root -e "create database if not exists test;"
