@@ -2,13 +2,12 @@
 
 ## Features
 
-* single SQL statement in a query
 * multiple SQL statements in a query
-* streaming query for big result set
+* big result query by streaming interface
+* transaction commit and rollback supported
 * connection pool (TODO)
-* an incremental (MySQL protocol) packet parser which is independent from IO tools
 
-### Query with a single statement:
+### Simple query:
 
 ```nim
 import asyncmysql, asyncdispatch, net
@@ -21,16 +20,19 @@ proc main() {.async.} =
                         password = "123456", 
                         database = "mysql")
                         
-  var (packet, rows) = await conn.execQueryOne(
+  var resultLoad = await conn.execQuery(
       sql("select host, user from user where user = ?", "root")) 
+
   echo ">>> select host, user from user where user = root"
-  echo packet
-  echo rows
+  echo resultLoad[0].packet
+  echo resultLoad[0].rows
+
+  assert resultLoad.len == 1
 
 waitFor main()
 ```
 
-### Query with multiple statements:
+### Transaction and rollback:
 
 ```nim
 import asyncmysql, asyncdispatch, net
@@ -43,53 +45,29 @@ proc main() {.async.} =
                         password = "123456", 
                         database = "mysql")
 
-  var stream = await conn.execQuery(sql("""
-start transaction;
-select host, user from user where user = ?;
-select user from user;
-commit;
+  var resultLoad = await conn.execQuery(sql("""
+start transaction;                                # ok
+select host, user from user-user where user = ?;  # error
+select user from user;                            # not exec
+commit;                                           # not exec
 """, "root"))
 
-  let (packet0, _) = await stream.read()
-  echo ">>> strart transaction;"
-  echo packet0
-  assert stream.finished == false
-  assert packet0.kind == rpkOk
-  assert packet0.hasMoreResults == true
+  let resultLoad = await stream.read()
+  assert resultLoad.len == 2
 
-  let (packet1, rows1) = await stream.read()
-  echo ">>> select host, user from user where user = ?;"
-  echo packet1
-  echo rows
-  assert stream.finished == false
-  assert packet1.kind == rpkResultSet
-  assert packet1.hasMoreResults == true
-
-  let (packet2, rows2) = await stream.read()
-  echo ">>> select user from user;"
-  echo packet2
-  echo rows2
-  assert stream.finished == false
-  assert packet2.kind == rpkResultSet
-  assert packet2.hasMoreResults == true
-
-  let (packet3, _) = await stream.read()
-  echo ">>> commit;"
-  echo packet3
-  assert stream.finished == true
-  assert packet3.kind == rpkOk
-  assert packet3.hasMoreResults == false
+  if resultLoad.len < 4 or 
+     (resultLoad[0].packet.kind == rpkError or 
+      resultLoad[1].packet.kind == rpkError or
+      resultLoad[2].packet.kind == rpkError or
+      resultLoad[3].packet.kind == rpkError or):
+    var resultLoad2 = await conn.execQuery(sql("""
+rollback;                                         # ok     
+"""))  
+    assert resultLoad2.len == 1  
+   
+  close(conn)
 
 waitFor main()
 ```
 
-## TODO 
-
-* connection pool
-* API Documentation
-
-
-
-
-
-
+* API Documentation (TODO)
