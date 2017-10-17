@@ -13,149 +13,248 @@ const
   MysqlPassword = "123456"
 
 suite "AsyncMysqlConnection":
-  test "query multiple":
+  test "query by streaming fields":
     proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      var stream = await execQuery(conn, sql("""
+      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var qIx= 0
+
+      proc packetCb(packet: ResultPacket): Future[void] {.async.} =
+        inc(qIx)
+        case qIx
+        of 1: 
+          echo "  >>> strart transaction;"
+          echo "  ", packet
+          check packet.kind == rpkOk
+        of 2: 
+          echo "  >>> select host, user from user where user = ?;"
+          echo "  ", packet
+          write(stdout, "  ")
+          check packet.kind == rpkResultSet
+        of 3: 
+          echo "  >>> select user from user;"
+          echo "  ", packet
+          write(stdout, "  ")
+          check packet.kind == rpkResultSet
+        of 4: 
+          echo "  >>> commit;"
+          echo "  ", packet
+          check packet.kind == rpkOk
+        else:
+          discard
+
+      proc packetEndCb(): Future[void] {.async.} =
+        case qIx
+        of 1: 
+          discard
+        of 2: 
+          write(stdout, "\n")
+        of 3: 
+          write(stdout, "\n")
+        of 4: 
+          discard
+        else:
+          discard
+
+      proc fieldCb(field: string): Future[void] {.async.} =
+        case qIx
+        of 1: 
+          discard
+        of 2: 
+          write(stdout, field, " ")
+        of 3: 
+          write(stdout, field, " ")
+        of 4: 
+          discard
+        else:
+          discard
+
+      await execBigQuery(conn, sql("""
 start transaction;
 select host, user from user where user = ?;
 select user from user;
 commit;
-""", "root"))
+""", "root"), packetCb, packetEndCb, fieldCb)
 
-      let (packet0, _) = await read(stream)
+      close(conn)
+
+    waitFor1 sendComQuery() 
+
+  test "query by streaming 3 bytes of field buffer":
+    proc sendComQuery() {.async.} =
+      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var qIx= 0
+
+      proc packetCb(packet: ResultPacket): Future[void] {.async.} =
+        inc(qIx)
+        case qIx
+        of 1: 
+          echo "  >>> strart transaction;"
+          echo "  ", packet
+          check packet.kind == rpkOk
+        of 2: 
+          echo "  >>> select host, user from user where user = ?;"
+          echo "  ", packet
+          write(stdout, "  ")
+          check packet.kind == rpkResultSet
+        of 3: 
+          echo "  >>> select user from user;"
+          echo "  ", packet
+          write(stdout, "  ")
+          check packet.kind == rpkResultSet
+        of 4: 
+          echo "  >>> commit;"
+          echo "  ", packet
+          check packet.kind == rpkOk
+        else:
+          discard
+
+      proc packetEndCb(): Future[void] {.async.} =
+        case qIx
+        of 1: 
+          discard
+        of 2: 
+          write(stdout, "\n")
+        of 3: 
+          write(stdout, "\n")
+        of 4: 
+          discard
+        else:
+          discard
+
+      proc fieldCb(field: string): Future[void] {.async.} =
+        case qIx
+        of 1: 
+          discard
+        of 2: 
+          write(stdout, field)
+        of 3: 
+          write(stdout, field)
+        of 4: 
+          discard
+        else:
+          discard
+
+      proc fieldEndCb(): Future[void] {.async.} =
+        case qIx
+        of 1: 
+          discard
+        of 2: 
+          write(stdout, " ")
+        of 3: 
+          write(stdout, " ")
+        of 4: 
+          discard
+        else:
+          discard
+
+      await execBigQuery(conn, sql("""
+start transaction;
+select host, user from user where user = ?;
+select user from user;
+commit;
+""", "root"), 3, packetCb, packetEndCb, fieldCb, fieldEndCb)
+
+      close(conn)
+
+    waitFor1 sendComQuery() 
+
+  test "query by read all":
+    proc sendComQuery() {.async.} =
+      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let rload = await execQuery(conn, sql("""
+  start transaction;
+  select host, user from user where user = ?;
+  select user from user;
+  commit;
+  """, "root"))
+      check rload.len == 4
+
       echo "  >>> strart transaction;"
-      echo "  ", packet0
-      echo stream.finished, " ", packet0.kind, " ", packet0.hasMoreResults
-      check stream.finished == false
-      check packet0.kind == rpkOk
-      check packet0.hasMoreResults == true
-
-      let (packet1, rows1) = await read(stream)
+      echo "  ", rload[0].packet
+      check rload[0].packet.kind == rpkOk
+      check rload[0].rows == nil
+     
       echo "  >>> select host, user from user where user = ?;"
-      echo "  ", packet1
-      echo "  ", rows1
-      check stream.finished == false
-      check packet1.kind == rpkResultSet
-      check packet1.hasMoreResults == true
-
-      let (packet2, rows2) = await read(stream)
+      echo "  ", rload[1].packet
+      echo "  ", rload[1].rows
+      check rload[1].packet.kind == rpkResultSet
+    
       echo "  >>> select user from user;"
-      echo "  ", packet2
-      echo "  ", rows2
-      check stream.finished == false
-      check packet2.kind == rpkResultSet
-      check packet2.hasMoreResults == true
-
-      let (packet3, _) = await read(stream)
+      echo "  ", rload[2].packet
+      echo "  ", rload[2].rows
+      check rload[2].packet.kind == rpkResultSet
+    
       echo "  >>> commit;"
-      echo "  ", packet3
-      check stream.finished == true
-      check packet3.kind == rpkOk
-      check packet3.hasMoreResults == false
+      echo "  ", rload[3].packet
+      check rload[3].packet.kind == rpkOk
+      check rload[3].rows == nil
 
       close(conn)
+
     waitFor1 sendComQuery() 
 
-  test "query multiple with bad results":
+  test "query and rollback":
     proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      var stream = await execQuery(conn, sql("""
-select 100;
-select var;
-select 10;
-""", "root"))
-      
-      let (packet0, _) = await read(stream)
-      echo "  >>> select 100;"
-      echo "  ", packet0
-      check stream.finished == false
-      check packet0.kind == rpkResultSet
-      check packet0.hasMoreResults == true
+      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let rload = await execQuery(conn, sql("""
+  start transaction;
+  select host, user from useruser where user = ?;
+  select user from user;
+  commit;
+  """, "root"))
+      check rload.len == 2
 
-      let (packet1, _) = await read(stream)
-      echo "  >>> select var;"
-      echo "  ", packet1
-      check stream.finished == true
-      check packet1.kind == rpkError
-      check packet1.hasMoreResults == false
+      echo "  >>> strart transaction;"
+      echo "  ", rload[0].packet
+      check rload[0].packet.kind == rpkOk
+      check rload[0].rows == nil
+     
+      echo "  >>> select host, user from user where user = ?;"
+      echo "  ", rload[1].packet
+      check rload[1].packet.kind == rpkError
+      check rload[1].rows == nil
+
+      let rloadRollback = await execQuery(conn, sql("""
+  rollback;
+  """, "root"))
+      check rloadRollback.len == 1
+
+      echo "  >>> rollback;"
+      echo "  ", rloadRollback[0].packet
+      check rloadRollback[0].packet.kind == rpkOk
+      check rloadRollback[0].rows == nil
 
       close(conn)
+
     waitFor1 sendComQuery() 
 
-  test "query one":
-    proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let (packet, rows) = await execQueryOne(conn, sql("select 100"))
-      echo "  >>> select 100;"
-      echo "  ", packet
-      echo "  ", rows
-      check packet.kind == rpkResultSet
-      check packet.hasMoreResults == false
-      close(conn)
-    waitFor1 sendComQuery() 
-
-  test "query big-one":
-    proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let (packet, stream) = await execQueryBigOne(conn, sql("select 100"))
-      var rows: seq[string] = @[]
-      var buf = newString(16)
-      while true:
-        let (offset, state) = await read(stream, buf.cstring, buf.len)
-        case state
-        of bigFieldBegin:
-          setLen(buf, 16)
-        of bigFieldFull:
-          check false
-        of bigFieldEnd:
-          add(rows, buf[0..offset-1])
-        of bigFinished:
-          break
-      echo "  >>> select 100;"
-      echo "  ", packet
-      echo "  ", rows
-      check packet.kind == rpkResultSet
-      check packet.hasMoreResults == false
-      close(conn)
-    waitFor1 sendComQuery() 
-
-  test "when there are multiple requests are at the same time, the requests are queued":
+  test "when there are multiple requests at the same time, the requests are queued":
     var conn: AsyncMysqlConnection
 
     proc sendComQuery1() {.async.} =  
-      let (packet, rows) = await execQueryOne(conn, sql("select 100"))
+      let rload = await execQuery(conn, sql("select 100"))
       echo "  >>> select 100;"
-      echo "  ", packet
-      echo "  ", rows
-      check packet.kind == rpkResultSet
-      check packet.hasMoreResults == false
+      echo "  ", rload[0].packet
+      echo "  ", rload[0].rows
+      check rload[0].packet.kind == rpkResultSet
 
     proc sendComQuery2() {.async.} =
-      let (packet, rows) = await execQueryOne(conn, sql("select 200"))
+      let rload = await execQuery(conn, sql("select 200"))
       echo "  >>> select 200;"
-      echo "  ", packet
-      echo "  ", rows
-      check packet.kind == rpkResultSet
-      check packet.hasMoreResults == false
+      echo "  ", rload[0].packet
+      echo "  ", rload[0].rows
+      check rload[0].packet.kind == rpkResultSet
 
     proc doQueries(): Future[void] =
       var retFuture = newFuture[void]("")
       result = retFuture
-      var n = 2
       var fut1 = sendComQuery1()
-      fut1.callback = proc () = 
-        dec(n)
-        if fut1.failed:
-          raise fut1.readError()
-        if n == 0:
-          complete(retFuture)
       var fut2 = sendComQuery2()
-      fut2.callback = proc () = 
-        dec(n)
-        if fut2.failed:
-          raise fut2.readError()
-        if n == 0:
+      fut2.callback = proc (fut2: Future[void]) = 
+        check fut2.failed == false
+
+        fut1.callback = proc (fut1: Future[void]) = 
+          check fut1.failed == false
           complete(retFuture)
 
     proc sendComQuery() {.async.} =
@@ -179,17 +278,17 @@ select 10;
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
 
-      let (packet0, _) = await execQueryOne(conn, sql"use test")
+      let rload0 = await execQuery(conn, sql"use test")
       echo "  >>> use test;"
-      echo "  ", packet0
-      check packet0.kind == rpkOk
-      check packet0.hasMoreResults == false
+      echo "  ", rload0[0].packet
+      check rload0[0].packet.kind == rpkOk
+      check rload0[0].rows == nil
 
-      let (packet1, _) = await execQueryOne(conn, sql("select * from user;"))
+      let rload1 = await execQuery(conn, sql("select * from user;"))
       echo "  >>> select * from user;"
-      echo "  ", packet1
-      check packet1.kind == rpkError
-      check packet0.hasMoreResults == false
+      echo "  ", rload1[0].packet
+      check rload1[0].packet.kind == rpkError
+      check rload1[0].rows == nil
 
       close(conn)
     waitFor1 sendComQuery()  
@@ -197,12 +296,11 @@ select 10;
   test "show full fields from <table>":
     proc sendComQuery() {.async.} =
       var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let (packet0, rows) = await execQueryOne(conn, sql"show full fields from user;")
+      let rload = await execQuery(conn, sql"show full fields from user;")
       echo "  >>> show full fields from user;"
-      echo "  ... ", packet0.fields[0], " ..."
-      echo "  ... ", rows[0], " ..."
-      check packet0.kind == rpkResultSet
-      check packet0.hasMoreResults == false
+      echo "  ... ", rload[0].packet.fields[0], " ..."
+      echo "  ... ", rload[0].rows[0], " ..."
+      check rload[0].packet.kind == rpkResultSet
       close(conn)
     waitFor1 sendComQuery()   
 

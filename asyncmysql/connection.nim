@@ -8,7 +8,9 @@ import asyncdispatch, asyncnet, net, mysqlparser, error, query, strutils, deques
 
 const 
   MysqlBufSize* = 1024 ## Size of the internal buffer used by mysql connection.
+  
   DefaultClientCharset* = CHARSET_UTF8_GENERAL_CI ## Default charset for mysql connection.
+  
   DefaultClientCapabilities* =  ## Default capabilities for mysql connection.
     CLIENT_LONG_PASSWORD    or  ## Use the improved version of Old Password Authentication.
     CLIENT_FOUND_ROWS       or  ## Send found rows instead of affected rows.
@@ -26,11 +28,10 @@ const
     CLIENT_MULTI_RESULTS    or  ## Enable multi-results for COM_QUERY.
     CLIENT_MULTI_STATEMENTS 
 
-  AsyncReqLimit* = 1024
-
 type
+  RequestLock = Deque[Future[void]]
+
   AsyncMysqlConnection* = ref object ## Asynchronous mysql connection.
-    lock: AsyncLock
     socket: AsyncSocket
     parser: PacketParser
     handshakePacket: HandshakePacket
@@ -38,71 +39,28 @@ type
     buf: array[MysqlBufSize, char]
     bufPos: int
     bufLen: int
+    lock: RequestLock
+    closed: bool
 
-  QueryStream* = ref object ## Stream object for queries with multiple statements .
-    conn: AsyncMysqlConnection
-    finished: bool
-
-  BigResultStream* = ref object
-    conn: AsyncMysqlConnection
-    state: BigResultState
-
-  BigResultState* = enum
-    bigFieldBegin,
-    bigFieldFull,
-    bigFieldEnd,
-    bigFinished
-
-  AsyncLock = object
-    reqs: Deque[Future[void]]
-
-proc initAsyncLock(): AsyncLock =
-  result.reqs = initDeque[Future[void]]()
-
-proc acquire(lock: var AsyncLock): Future[void] =
-  var retFuture = newFuture[void]("acquire")
+proc acquire(L: var RequestLock): Future[void] =
+  let retFuture = newFuture[void]("RequestLock.acquire")
   result = retFuture
-  let count = lock.reqs.len
-  if count >= AsyncReqLimit:
-    fail(retFuture, newException(MysqlError, "too much requests"))
-  else:
-    addLast(lock.reqs, retFuture)
-    if count == 0:
-      complete(retFuture)
+  addLast(L, retFuture)
+  if L.len == 1:
+    complete(peekFirst(L))
 
-proc release(lock: var AsyncLock) =
-  let count = lock.reqs.len
-  if count > 0:
-    let fut = popFirst(lock.reqs)
-    if not fut.finished:
-      raiseMysqlError("request not finished")
-  if count > 1:
-    let fut = peekFirst(lock.reqs)
-    callSoon(proc () = complete(fut))
-
-proc deinit(lock: var AsyncLock) =
-  lock.reqs = initDeque[Future[void]]()
-
-when defined(asyncmysqlDebug):
-  var debug_data = ""
-  var debug_index = 0
-  proc debugLog(conn: AsyncMysqlConnection) =
-    for c in conn.bufPos..<conn.bufPos+conn.bufLen:
-      debug_data.add(conn.buf[c].ord.toHex(2))
-      debug_data.add("  ")
-      inc(debug_index)
-      if debug_index == 10:
-        debug_data.add('\L')
-        debug_index = 0
-    writeFile("test/log", debug_data)  
-    debug_data = ""
-    debug_index = 0
+proc release(L: var RequestLock) =
+  if L.len > 0:
+    let future = popFirst(L)
+    assert future.finished
+    if L.len > 0:
+      let futureNext = peekFirst(L)
+      callSoon() do ():
+        complete(futureNext)
 
 proc recv(conn: AsyncMysqlConnection): Future[void] {.async.} =
   conn.bufPos = 0
   conn.bufLen = await recvInto(conn.socket, conn.buf[0].addr, MysqlBufSize)
-  when defined(asyncmysqlDebug):
-    debugLog(conn)
   if conn.bufLen == 0:
     raiseMysqlError("peer disconnected unexpectedly")
 
@@ -173,6 +131,9 @@ template asyncRecvRows(conn: AsyncMysqlConnection, rows: seq[string]) =
         break
   shallowCopy(rows, rowList.value)
 
+template offsetChar(x: pointer, i: int): pointer =
+  cast[pointer](cast[ByteAddress](x) + i * sizeof(char))
+
 proc recvHandshakeInit(conn: AsyncMysqlConnection): Future[void] {.async.} =
   conn.parser = initPacketParser(ppkHandshake)
   while true:
@@ -206,6 +167,7 @@ proc recvResultBase(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void
     asyncRecvError(conn)
   of rpkResultSet:
     asyncRecvFields(conn)
+    # recv body then ...
 
 proc recvResultAck(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void] {.async.} = 
   conn.parser = initPacketParser(cmd) 
@@ -252,7 +214,7 @@ proc handshake(
     formatClientAuth(
       ClientAuthenticationPacket(
         sequenceId: conn.handshakePacket.sequenceId + 1, 
-        capabilities: capabilities, # 521167
+        capabilities: capabilities, # test 521167
         maxPacketSize: 0,
         charset: int(charset),
         user: user,
@@ -262,6 +224,12 @@ proc handshake(
     password))
   await recvHandshakeAck(conn)
   
+proc close*(conn: AsyncMysqlConnection) =
+  ## Closes the database connection ``conn`` and releases the associated resources.
+  if not conn.closed:
+    close(conn.socket)
+    conn.closed = true
+
 proc open*(
   domain: Domain = AF_INET, 
   port = Port(3306), 
@@ -272,188 +240,291 @@ proc open*(
   charset = DefaultClientCharset,
   capabilities = DefaultClientCapabilities
 ): Future[AsyncMysqlConnection] {.async.} =
-  # Opens a new database connection.
+  ## Opens a new database connection.
   new(result)
-  result.lock = initAsyncLock()
   result.socket = newAsyncSocket(domain, SOCK_STREAM, IPPROTO_TCP, false)
   result.bufPos = 0
   result.bufLen = 0
+  result.lock = initDeque[Future[void]](32)
+  result.closed = false
   try:
+    await acquire(result.lock)
     await handshake(result, domain, port, host, user, password, database, charset, capabilities)
+    release(result.lock)
   except:
-    close(result.socket)
+    release(result.lock)
+    close(result)
     raise getCurrentException()
 
-proc close*(conn: AsyncMysqlConnection) =
-  # Closes the database connection ``conn`` and releases the associated resources.
-  close(conn.socket)
-  deinit(conn.lock)
+proc execBigQuery*(conn: AsyncMysqlConnection, q: SqlQuery,
+                   packetCb: proc (packet: ResultPacket): Future[void] {.closure, gcsafe.} = nil,
+                   packetEndCb: proc (): Future[void] {.closure, gcsafe.} = nil, 
+                   fieldCb: proc (field: string): Future[void] {.closure, gcsafe.} = nil): Future[void] =
+  ## Executes the SQL statements. ``field`` exposed which is a random length.
+  ## 
+  ## Notes: this proc applies to fields with small size. 
+  ## 
+  ## - ``packetCb`` - called when a query is beginning.
+  ## - ``fieldCb`` - called when a full field is made.
+  ## - ``packetEndCb`` - called when a query is finished.
+  let retFuture = newFuture[void]("AsyncMysqlConnection.execQuery 0")
+  result = retFuture
 
-proc newQueryStream(conn: AsyncMysqlConnection): QueryStream =
-  new(result)
-  result.conn = conn
-  result.finished = false
-
-proc read*(stream: QueryStream): Future[tuple[packet: ResultPacket, rows: seq[string]]] {.async.} =
-  ## Reads a packet from ``stream`` step by step.
-  template conn: untyped = stream.conn
-  if stream.finished:
-    return
-  else:
-    try:
-      result.rows = await recvResultRows(conn, COM_QUERY)
-      result.packet = conn.resultPacket       # should copy the packet
-      if not result.packet.hasMoreResults:
-        stream.finished = true
-        release(stream.conn.lock)
-    except:
-      release(stream.conn.lock)
-      raise getCurrentException()
-
-proc finished*(stream: QueryStream): bool =
-  ## Determines whether ``stream`` has completed.
-  result = stream.finished
-  
-proc newBigResultStream(conn: AsyncMysqlConnection): BigResultStream =
-  new(result)
-  result.conn = conn
-  result.state = bigFieldBegin
-
-proc doRead(stream: BigResultStream, buf: pointer, size: int): 
-    Future[tuple[offset: int, state: BigResultState]] {.async.} =
-  template conn: untyped = stream.conn
-  var bufPos = 0  
-  if conn.parser.buffered:
-    let (offset, state) = parseRows(conn.parser, conn.resultPacket, 
-        conn.handshakePacket.capabilities, buf, size)
-    if state != rowsBufEmpty:
-      case state
-      of rowsFieldBegin:
-        result.state = bigFieldBegin
-      of rowsFieldFull:
-        result.state = bigFieldFull
-      of rowsFieldEnd:
-        result.state = bigFieldEnd
-      of rowsFinished:
-        result.state = bigFinished
-        moveBuf(conn)
-      of rowsBufEmpty:
-        discard
-      result.offset = offset
-      stream.state = result.state
-      return
-    inc(bufPos, offset)
-  while true:
-    await recv(conn)
-    mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
-    let (offset, state) = parseRows(conn.parser, conn.resultPacket, 
-        conn.handshakePacket.capabilities, 
-        cast[pointer](cast[ByteAddress](buf) + bufPos * sizeof(char)), size - bufPos)
-    if state != rowsBufEmpty:
-      case state
-      of rowsFieldBegin:
-        result.state = bigFieldBegin
-      of rowsFieldFull:
-        result.state = bigFieldFull
-      of rowsFieldEnd:
-        result.state = bigFieldEnd
-      of rowsFinished:
-        result.state = bigFinished
-        moveBuf(conn)
-      of rowsBufEmpty:
-        discard
-      result.offset = offset
-      stream.state = result.state
-      return
-    inc(bufPos, offset)
-
-proc read*(stream: BigResultStream, buf: pointer, size: int): 
-    Future[tuple[offset: int, state: BigResultState]] {.async.} =
-  ## Reads rows of a big-one query.
-  if stream.state == bigFinished:
-    return (0, bigFinished)
-  else:
-    try:
-      result = await doRead(stream, buf, size)
-      if result.state == bigFinished:
-        release(stream.conn.lock)
-    except:
-      release(stream.conn.lock)
-      raise getCurrentException()
-
-proc execQuery*(conn: AsyncMysqlConnection, q: SqlQuery): Future[QueryStream] {.async.} =
-  ## Executes the SQL statements. ``q`` can be a single statement or multiple statements.
-  await acquire(conn.lock)
-  try:
+  proc exec() {.async.} =
     await send(conn.socket, formatComQuery(string(q)))
-    result = newQueryStream(conn)
-  except:
-    release(conn.lock)
-    raise getCurrentException()
-  
-proc execQueryOne*(conn: AsyncMysqlConnection, q: SqlQuery): 
-    Future[tuple[packet: ResultPacket, rows: seq[string]]] {.async.} =
-  ## Executes the SQL statement. ``q`` should be a single statement.
-  await acquire(conn.lock)
-  try:
-    await send(conn.socket, formatComQuery(string(q)))
-    result.rows = await recvResultRows(conn, COM_QUERY)
-    result.packet = conn.resultPacket       # should copy the packet
-    if conn.resultPacket.hasMoreResults:
-      raiseMysqlError("bad query, only one SQL statement is allowed")
-    release(conn.lock)
-  except:  
-    release(conn.lock)
-    raise getCurrentException()
+    while true:
+      block query:
+        await recvResultBase(conn, COM_QUERY)
+        if packetCb != nil:
+          await packetCb(conn.resultPacket)
 
-proc execQueryBigOne*(conn: AsyncMysqlConnection, q: SqlQuery): 
-    Future[tuple[packet: ResultPacket, stream: BigResultStream]] {.async.} =
-  ## Executes the SQL statement. ``q`` should be a single statement.
-  await acquire(conn.lock)
-  try:
+        if conn.resultPacket.kind == rpkResultSet and conn.resultPacket.hasRows:
+          var fieldBuf: string
+          var fieldLen = 0
+          var bufPos = 0
+
+          if conn.parser.buffered:
+            while true:
+              let (offset, state) = parseRows(conn.parser, conn.resultPacket, 
+                                              conn.handshakePacket.capabilities)
+              case state
+              of rowsFieldBegin:
+                fieldLen = lenPasingField(conn.resultPacket)
+                fieldBuf = newString(fieldLen)
+                allocPasingField(conn.resultPacket, fieldBuf.cstring, fieldLen)
+                bufPos = 0
+              of rowsFieldFull:
+                discard
+              of rowsFieldEnd:
+                if fieldCb != nil:
+                  await fieldCb(fieldBuf)
+              of rowsFinished:
+                moveBuf(conn)
+                if packetEndCb != nil:
+                  await packetEndCb()
+                if conn.resultPacket.hasMoreResults:
+                  break query
+                else:
+                  return
+              of rowsBufEmpty:
+                inc(bufPos, offset)
+                let d = fieldLen - bufPos
+                if d > 0:
+                  allocPasingField(conn.resultPacket, offsetChar(fieldBuf.cstring, bufPos), d)
+                break
+
+          while true:
+            await recv(conn)
+            mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+            let (offset, state) = parseRows(conn.parser, conn.resultPacket, 
+                                            conn.handshakePacket.capabilities)
+            case state
+            of rowsFieldBegin:
+              fieldLen = lenPasingField(conn.resultPacket)
+              fieldBuf = newString(fieldLen)
+              allocPasingField(conn.resultPacket, fieldBuf.cstring, fieldLen)
+              bufPos = 0
+            of rowsFieldFull:
+              discard
+            of rowsFieldEnd:
+              if fieldCb != nil:
+                await fieldCb(fieldBuf)
+            of rowsFinished:
+              moveBuf(conn)
+              if packetEndCb != nil:
+                await packetEndCb()
+              if conn.resultPacket.hasMoreResults:
+                break query
+              else:
+                return
+            of rowsBufEmpty:
+              inc(bufPos, offset)
+              let d = fieldLen - bufPos
+              if d > 0:
+                allocPasingField(conn.resultPacket, offsetChar(fieldBuf.cstring, bufPos), d)
+        else:
+          moveBuf(conn)
+          if packetEndCb != nil:
+            await packetEndCb()
+          if conn.resultPacket.hasMoreResults:
+            break query
+          else:
+            return
+
+  acquire(conn.lock).callback = proc (lockFuture: Future[void]) =
+    assert lockFuture.failed == false
+    exec().callback = proc (execFuture: Future[void]) =
+      if execFuture.failed:
+        fail(retFuture, readError(execFuture))
+      else:
+        complete(retFuture)
+      release(conn.lock)  
+
+proc execBigQuery*(conn: AsyncMysqlConnection, q: SqlQuery, fieldBufferSize: int, 
+                   packetCb: proc (packet: ResultPacket): Future[void] {.closure, gcsafe.} = nil,
+                   packetEndCb: proc (): Future[void] {.closure, gcsafe.} = nil,
+                   fieldCb: proc (field: string): Future[void] {.closure, gcsafe.} = nil,
+                   fieldEndCb: proc (): Future[void] {.closure, gcsafe.} = nil): Future[void] =
+  ## Executes the SQL statements. This proc is efficient to deal with large fields.
+  ## 
+  ## - ``packetCb`` - called when a query is beginning.
+  ## - ``fieldCb`` - called when a field fill fully the internal buffer.
+  ## - ``fieldEndCb`` - called when a full field is made. 
+  ## - ``packetEndCb`` - called when a query is finished.
+  let retFuture = newFuture[void]("AsyncMysqlConnection.execQuery 1")
+  result = retFuture
+
+  proc exec() {.async.} =
     await send(conn.socket, formatComQuery(string(q)))
-    await recvResultBase(conn, COM_QUERY)
-    if conn.resultPacket.kind == rpkResultSet and conn.resultPacket.hasRows:
-      result.stream = newBigResultStream(conn)
-    else:
-      moveBuf(conn)
-    result.packet = conn.resultPacket # should copy the packet
-    if conn.resultPacket.hasMoreResults:
-      raiseMysqlError("bad query, only one SQL statement is allowed")
-  except:
-    release(conn.lock)
-    raise getCurrentException()
+    var fieldBuf = newString(fieldBufferSize)
+    while true:
+      block query:
+        await recvResultBase(conn, COM_QUERY)
+        if packetCb != nil:
+          await packetCb(conn.resultPacket)
+
+        if conn.resultPacket.kind == rpkResultSet and conn.resultPacket.hasRows:
+          var bufPos = 0
+
+          if conn.parser.buffered:
+            while true:
+              let (offset, state) = parseRows(conn.parser, conn.resultPacket, 
+                                              conn.handshakePacket.capabilities)
+              case state
+              of rowsFieldBegin:
+                allocPasingField(conn.resultPacket, fieldBuf.cstring, fieldBufferSize)
+                bufPos = 0
+              of rowsFieldFull:
+                if fieldCb != nil:
+                  setLen(fieldBuf, fieldBufferSize)
+                  await fieldCb(fieldBuf)
+              of rowsFieldEnd:
+                if offset > 0 and fieldCb != nil:
+                  setLen(fieldBuf, offset)
+                  await fieldCb(fieldBuf)
+                if fieldEndCb != nil:
+                  await fieldEndCb()
+              of rowsFinished:
+                moveBuf(conn)
+                if packetEndCb != nil:
+                  await packetEndCb()
+                if conn.resultPacket.hasMoreResults:
+                  break query
+                else:
+                  return
+              of rowsBufEmpty:
+                inc(bufPos, offset)
+                let d = fieldBufferSize - bufPos
+                if d > 0:
+                  allocPasingField(conn.resultPacket, offsetChar(fieldBuf.cstring, bufPos), d)
+                break
+
+          while true:
+            await recv(conn)
+            mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+            let (offset, state) = parseRows(conn.parser, conn.resultPacket, 
+                                            conn.handshakePacket.capabilities)
+            case state
+            of rowsFieldBegin:
+              allocPasingField(conn.resultPacket, fieldBuf.cstring, fieldBufferSize)
+              bufPos = 0
+            of rowsFieldFull:
+              if fieldCb != nil:
+                setLen(fieldBuf, fieldBufferSize)
+                await fieldCb(fieldBuf)
+            of rowsFieldEnd:
+              if offset > 0 and fieldCb != nil:
+                setLen(fieldBuf, offset)
+                await fieldCb(fieldBuf)
+              if fieldEndCb != nil:
+                await fieldEndCb()
+            of rowsFinished:
+              moveBuf(conn)
+              if packetEndCb != nil:
+                await packetEndCb()
+              if conn.resultPacket.hasMoreResults:
+                break query
+              else:
+                return
+            of rowsBufEmpty:
+              inc(bufPos, offset)
+              let d = fieldBufferSize - bufPos
+              if d > 0:
+                allocPasingField(conn.resultPacket, offsetChar(fieldBuf.cstring, bufPos), d)
+        else:
+          moveBuf(conn)
+          if packetEndCb != nil:
+            await packetEndCb()
+          if conn.resultPacket.hasMoreResults:
+            break query
+          else:
+            return
+
+  acquire(conn.lock).callback = proc (lockFuture: Future[void]) =
+    assert lockFuture.failed == false
+    exec().callback = proc (execFuture: Future[void]) =
+      if execFuture.failed:
+        fail(retFuture, readError(execFuture))
+      else:
+        complete(retFuture)
+      release(conn.lock)  
+
+proc execQuery*(conn: AsyncMysqlConnection, q: SqlQuery): 
+    Future[seq[tuple[packet: ResultPacket, rows: seq[string]]]] =
+  ## Executes the SQL statements. 
+  type ResultLoad = tuple[packet: ResultPacket, rows: seq[string]]
+  let retFuture = newFuture[seq[ResultLoad]]("AsyncMysqlConnection.execQuery 2")
+  var rload: seq[ResultLoad] = @[]
+  result = retFuture
+
+  proc exec() {.async.} =
+    await send(conn.socket, formatComQuery(string(q)))
+    while true:
+      let rows = await recvResultRows(conn, COM_QUERY)
+      add(rload, (conn.resultPacket, rows))
+      if not conn.resultPacket.hasMoreResults:
+        break
+
+  acquire(conn.lock).callback = proc (lockFuture: Future[void]) =
+    assert lockFuture.failed == false
+    exec().callback = proc (execFuture: Future[void]) =
+      if execFuture.failed:
+        fail(retFuture, readError(execFuture))
+      else:
+        complete(retFuture, rload)
+      release(conn.lock)  
 
 proc execQuit*(conn: AsyncMysqlConnection): Future[void] {.async.} =
   ## Notifies the mysql server that the connection is disconnected. Attempting to request
   ## the mysql server again will causes unknown errors.
   ##
   ## ``conn`` should then be closed immediately after that.
-  await send(conn.socket, formatComQuit())
+  try:
+    await acquire(conn.lock)
+    await send(conn.socket, formatComQuit())
+  finally:
+    release(conn.lock)
 
 proc execInitDb*(conn: AsyncMysqlConnection, database: string): Future[ResultPacket] {.async.} =
   ## Changes the default database on the connection. 
   ##
   ## Equivalent to ``use <database>;``
-  await acquire(conn.lock)
   try:
+    await acquire(conn.lock)
     await send(conn.socket, formatComInitDb(database))
     await recvResultAck(conn, COM_INIT_DB)
     if conn.resultPacket.kind == rpkResultSet:
       raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
-    result = conn.resultPacket               # should copy the packet
+  finally:
     release(conn.lock)
-  except:  
-    release(conn.lock)
-    raise getCurrentException()
 
 proc execChangeUser*(conn: AsyncMysqlConnection, user: string, password: string, 
     database: string, charset = DefaultClientCharset): Future[ResultPacket] {.async.} =
   ## Changes the user and causes the database specified by ``database`` to become the default (current) 
   ## database on the connection specified by mysql. In subsequent queries, this database is 
   ## the default for table references that include no explicit database specifier.
-  await acquire(conn.lock)
   try:
+    await acquire(conn.lock)
     await send(conn.socket, formatComChangeUser(
       ChangeUserPacket(
         sequenceId: 0,
@@ -462,20 +533,15 @@ proc execChangeUser*(conn: AsyncMysqlConnection, user: string, password: string,
         database: database,
         charset: charset), password))
     await recvResultAck(conn, COM_CHANGE_USER)
-    result = conn.resultPacket               # should copy the packet
+  finally:
     release(conn.lock)
-  except:  
-    release(conn.lock)
-    raise getCurrentException()
 
 proc execPing*(conn: AsyncMysqlConnection): Future[ResultPacket] {.async.} =
   ## Checks whether the connection to the server is working. 
-  await acquire(conn.lock)
   try:
+    await acquire(conn.lock)
     await send(conn.socket, formatComPing())
-    await recvResultAck(conn, COM_PING)
-    result = conn.resultPacket               # should copy the packet
+    await recvResultAck(conn, COM_PING) 
+  finally:
     release(conn.lock)
-  except:  
-    release(conn.lock)
-    raise getCurrentException()
+  
