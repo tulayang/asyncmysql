@@ -195,24 +195,45 @@ commit;
 
   test "query and rollback":
     proc sendComQuery() {.async.} =
-      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
-      let rload = await execQuery(conn, sql("""
+      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "test")
+
+      let rloadCreateTable = await execQuery(conn, sql("""
+  use test;
+  drop table if exists sample;
+  create table sample(id int unsigned not null auto_increment primary key, val int unsigned not null);
+  insert into sample(val) values (100);
+  """))
+      check rloadCreateTable.len == 4
+
+      let rloadTransaction = await execQuery(conn, sql("""
   start transaction;
-  select host, user from useruser where user = ?;
-  select user from user;
+  select val from sample where id = ?;
+  update sample set val = 1 where id = ?;
+  insert into sample (val) values (200),,,;
   commit;
-  """, "root"))
-      check rload.len == 2
+  """, "1", "1"))
+      check rloadTransaction.len == 4
 
       echo "  >>> strart transaction;"
-      echo "  ", rload[0].packet
-      check rload[0].packet.kind == rpkOk
-      check rload[0].rows == nil
+      echo "  ", rloadTransaction[0].packet
+      check rloadTransaction[0].packet.kind == rpkOk
+      check rloadTransaction[0].rows == nil
      
-      echo "  >>> select host, user from user where user = ?;"
-      echo "  ", rload[1].packet
-      check rload[1].packet.kind == rpkError
-      check rload[1].rows == nil
+      echo "  >>> select val from sample where id = ?;"
+      echo "  ", rloadTransaction[1].packet
+      check rloadTransaction[1].packet.kind == rpkResultSet
+      check rloadTransaction[1].rows[0] == "100"
+      echo "  ", rloadTransaction[1].rows
+
+      echo "  >>> update sample set val = 1 where id = ?;"
+      echo "  ", rloadTransaction[2].packet
+      check rloadTransaction[2].packet.kind == rpkOk
+      check rloadTransaction[2].rows == nil
+
+      echo "  >>> insert into sample (val) values (200),,,;"
+      echo "  ", rloadTransaction[3].packet
+      check rloadTransaction[3].packet.kind == rpkError
+      check rloadTransaction[3].rows == nil
 
       let rloadRollback = await execQuery(conn, sql("""
   rollback;
@@ -223,6 +244,15 @@ commit;
       echo "  ", rloadRollback[0].packet
       check rloadRollback[0].packet.kind == rpkOk
       check rloadRollback[0].rows == nil
+
+      let rloadSelect = await execQuery(conn, sql("""
+  select val from sample where id = ?;
+  """, "1"))
+      check rloadSelect.len == 1
+      echo "  ", rloadSelect[0].packet
+      check rloadSelect[0].packet.kind == rpkResultSet
+      check rloadSelect[0].rows[0] == "100"
+      echo "  ", rloadSelect[0].rows
 
       close(conn)
 
