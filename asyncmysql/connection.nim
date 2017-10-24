@@ -195,34 +195,6 @@ proc recvResultRows(conn: AsyncMysqlConnection, cmd: ServerCommand):
       asyncRecvRows(conn, result)
   moveBuf(conn)
 
-proc handshake(
-  conn: AsyncMysqlConnection, 
-  domain: Domain, 
-  port: Port, 
-  host: string,
-  user: string,
-  password: string,
-  database: string,
-  charset: int,
-  capabilities: int
-): Future[void] {.async.} =
-  await connect(conn.socket, host, port)
-  await recvHandshakeInit(conn)
-  await send(
-    conn.socket, 
-    formatClientAuth(
-      ClientAuthenticationPacket(
-        sequenceId: conn.handshakePacket.sequenceId + 1, 
-        capabilities: capabilities, # test 521167
-        maxPacketSize: 0,
-        charset: int(charset),
-        user: user,
-        scrambleBuff: conn.handshakePacket.scrambleBuff,
-        database: database,
-        protocol41: conn.handshakePacket.protocol41), 
-    password))
-  await recvHandshakeAck(conn)
-  
 proc close*(conn: AsyncMysqlConnection) =
   ## Closes the database connection ``conn`` and releases the associated resources.
   close(conn.socket)
@@ -245,7 +217,22 @@ proc open*(
   result.lock = initDeque[Future[void]](32)
   try:
     await acquire(result.lock)
-    await handshake(result, domain, port, host, user, password, database, charset, capabilities)
+    await connect(result.socket, host, port)
+    await recvHandshakeInit(result)
+    await send(
+      result.socket, 
+      formatClientAuth(
+        ClientAuthenticationPacket(
+          sequenceId: result.handshakePacket.sequenceId + 1, 
+          capabilities: capabilities, # test 521167
+          maxPacketSize: 0,
+          charset: int(charset),
+          user: user,
+          scrambleBuff: result.handshakePacket.scrambleBuff,
+          database: database,
+          protocol41: result.handshakePacket.protocol41), 
+      password))
+    await recvHandshakeAck(result)
   except:
     close(result)
     raise getCurrentException()
