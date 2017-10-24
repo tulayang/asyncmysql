@@ -81,7 +81,7 @@ commit;
 """, "root"), finishCb, recvPacketCb, recvPacketEndCb, recvFieldCb)
 
     proc sendComQuery() {.async.} =
-      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
@@ -168,7 +168,7 @@ commit;
 """, "root"), 3, finishCb, recvPacketCb, recvPacketEndCb, recvFieldCb, fieldEndCb)
 
     proc sendComQuery() {.async.} =
-      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
@@ -215,7 +215,7 @@ commit;
   """, "root"), finishCb)
 
     proc sendComQuery() {.async.} =
-      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
@@ -325,7 +325,7 @@ commit;
   """, "1"), finishCb)
 
     proc sendComQuery() {.async.} =
-      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "test")
+      let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "test")
       await execCreateTable(conn)
       await execTransaction(conn)
       await execReselect(conn)
@@ -367,7 +367,7 @@ commit;
       execQuery(conn, sql("select 200"), finish2Cb)
 
     proc sendComQuery() {.async.} =
-      let conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
@@ -389,7 +389,7 @@ commit;
       execPing(conn, finishCb)
 
     proc sendComPing() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execPing(conn)
       close(conn)
 
@@ -431,7 +431,7 @@ commit;
       execQuery(conn, sql"select * from user;", finishCb)
 
     proc sendComPing() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execUse(conn)
       await execSelect(conn)
       close(conn)
@@ -439,7 +439,7 @@ commit;
     waitFor1 sendComPing()  
 
     proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execUse(conn)
       await execSelect(conn)
       close(conn)
@@ -463,7 +463,7 @@ commit;
       execQuery(conn, sql"show full fields from user;", finishCb)
 
     proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
@@ -487,7 +487,7 @@ commit;
       execChangeUser(conn, "mysql2", MysqlPassword, "mysql", DefaultClientCharset, finishCb)
 
     proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execChangeUser(conn)
       close(conn)
 
@@ -507,7 +507,7 @@ commit;
       execQuit(conn, finishCb)
 
     proc sendComQuery() {.async.} =
-      var conn = await open(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
+      var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuit(conn)
       close(conn)
 

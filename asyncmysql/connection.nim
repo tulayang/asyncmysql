@@ -6,6 +6,8 @@
 
 import asyncdispatch, asyncnet, net, mysqlparser, error, query, strutils, deques
 
+# TODO: timeout
+
 const 
   MysqlBufSize* = 1024 ## Size of the internal buffer used by mysql connection.
   
@@ -40,6 +42,7 @@ type
     bufPos: int
     bufLen: int
     lock: RequestLock
+    closed: bool
 
 proc acquire(L: var RequestLock): Future[void] =
   let retFuture = newFuture[void]("RequestLock.acquire")
@@ -195,11 +198,16 @@ proc recvResultRows(conn: AsyncMysqlConnection, cmd: ServerCommand):
       asyncRecvRows(conn, result)
   moveBuf(conn)
 
+proc closed*(conn: AsyncMysqlConnection): bool = 
+  result = conn.closed
+
 proc close*(conn: AsyncMysqlConnection) =
   ## Closes the database connection ``conn`` and releases the associated resources.
-  close(conn.socket)
+  if not conn.closed:
+    conn.closed = true
+    close(conn.socket)
 
-proc open*(
+proc openMysqlConnection*(
   domain: Domain = AF_INET, 
   port = Port(3306), 
   host = "127.0.0.1",
@@ -215,6 +223,7 @@ proc open*(
   result.bufPos = 0
   result.bufLen = 0
   result.lock = initDeque[Future[void]](32)
+  result.closed = false
   try:
     await acquire(result.lock)
     await connect(result.socket, host, port)
