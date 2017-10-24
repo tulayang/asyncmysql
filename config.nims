@@ -32,4 +32,6 @@ task test, "Run test tests":
 task test_connection, "Run test connection tests":
   runTest "test_connection"
 
+task test_pool, "Run test pool tests":
+  runTest "test_pool"
 

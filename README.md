@@ -1,73 +1,46 @@
 # AsyncMysql [![Build Status](https://travis-ci.org/tulayang/asyncmysql.svg?branch=master)](https://travis-ci.org/tulayang/asyncmysql)
 
+AsyncMysql is an asynchronous (None-Blocking) MySQL connector written in pure Nim.
+
 ## Features
 
 * multiple SQL statements in a query
-* big result query by streaming interface
+* streaming big result query
 * transaction commit and rollback supported
-* connection pool (TODO)
+* connection pool 
 
-### Simple query:
-
-```nim
-import asyncmysql, asyncdispatch, net
-
-proc main() {.async.} =
-  var conn = await open(domain = AF_INET, 
-                        port = Port(3306), 
-                        host = "127.0.0.1", 
-                        user = "mysql", 
-                        password = "123456", 
-                        database = "mysql")
-                        
-  var resultLoad = await conn.execQuery(
-      sql("select host, user from user where user = ?", "root")) 
-
-  echo ">>> select host, user from user where user = root"
-  echo resultLoad[0].packet
-  echo resultLoad[0].rows
-
-  assert resultLoad.len == 1
-
-waitFor main()
-```
-
-### Transaction and rollback:
+## Examples
 
 ```nim
-import asyncmysql, asyncdispatch, net
+proc execMyQuery(pool: AsyncMysqlPool, q: SqlQuery): Future[void] =
+  var retFuture = newFuture[void]("execMyQuery")
+  result = retFuture
+
+  proc finishCb(
+    err: ref Exception, 
+    replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+  ) {.async.} =
+    echo "Got result set"
+    complete(retFuture)
+
+  execQuery(pool, q, finishCb)
 
 proc main() {.async.} =
-  var conn = await open(domain = AF_INET, 
-                        port = Port(3306), 
-                        host = "127.0.0.1", 
-                        user = "mysql", 
-                        password = "123456", 
-                        database = "mysql")
-
-  var resultLoad = await conn.execQuery(sql("""
-start transaction;                                # ok
-select host, user from user-user where user = ?;  # error
-select user from user;                            # not exec
-commit;                                           # not exec
+  let pool = await openMysqlPool(
+    domain=AF_INET, 
+    port=Port(3306), 
+    host="127.0.0.1", 
+    user="mysql", 
+    password="123456", 
+    database="mysql", 
+    capacity=10)
+  await pool.execMyQuery(sql("""
+start transaction;
+select host, user from user where user = ?;
+select user from user;
+commit;
 """, "root"))
-
-  let resultLoad = await stream.read()
-  assert resultLoad.len == 2
-
-  if resultLoad.len < 4 or 
-     (resultLoad[0].packet.kind == rpkError or 
-      resultLoad[1].packet.kind == rpkError or
-      resultLoad[2].packet.kind == rpkError or
-      resultLoad[3].packet.kind == rpkError or):
-    var resultLoad2 = await conn.execQuery(sql("""
-rollback;                                         # ok     
-"""))  
-    assert resultLoad2.len == 1  
-   
-  close(conn)
-
-waitFor main()
+  pool.close()
 ```
 
 * API Documentation (TODO)

@@ -80,12 +80,12 @@ select user from user;
 commit;
 """, "root"), finishCb, recvPacketCb, recvPacketEndCb, recvFieldCb)
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
-    waitFor1 sendComQuery() 
+    waitFor1 main() 
 
   test "streaming big query, 3 bytes of field buffer":
     proc execQuery(conn: AsyncMysqlConnection): Future[void] =
@@ -167,12 +167,12 @@ select user from user;
 commit;
 """, "root"), 3, finishCb, recvPacketCb, recvPacketEndCb, recvFieldCb, fieldEndCb)
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
-    waitFor1 sendComQuery() 
+    waitFor1 main() 
 
   test "atomic query, read all":
     proc execQuery(conn: AsyncMysqlConnection): Future[void] =
@@ -214,12 +214,12 @@ commit;
   commit;
   """, "root"), finishCb)
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
-    waitFor1 sendComQuery() 
+    waitFor1 main() 
 
   test "commit and rollback":
     proc execCreateTable(conn: AsyncMysqlConnection): Future[void] =
@@ -324,14 +324,14 @@ commit;
   select val from sample where id = ?;
   """, "1"), finishCb)
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "test")
       await execCreateTable(conn)
       await execTransaction(conn)
       await execReselect(conn)
       close(conn)
 
-    waitFor1 sendComQuery() 
+    waitFor1 main() 
 
   test "when there are multiple requests at the same time, the requests are queued":
     proc execQuery(conn: AsyncMysqlConnection): Future[void] =
@@ -366,12 +366,12 @@ commit;
       execQuery(conn, sql("select 100"), finish1Cb)
       execQuery(conn, sql("select 200"), finish2Cb)
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
-    waitFor1 sendComQuery() 
+    waitFor1 main() 
 
   test "ping":
     proc execPing(conn: AsyncMysqlConnection): Future[void] =
@@ -438,13 +438,13 @@ commit;
 
     waitFor1 sendComPing()  
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execUse(conn)
       await execSelect(conn)
       close(conn)
 
-    waitFor1 sendComQuery()  
+    waitFor1 main()  
 
   test "show full fields from <table>":
     proc execQuery(conn: AsyncMysqlConnection): Future[void] =
@@ -462,12 +462,12 @@ commit;
 
       execQuery(conn, sql"show full fields from user;", finishCb)
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuery(conn)
       close(conn)
 
-    waitFor1 sendComQuery()   
+    waitFor1 main()   
 
   test "change user":
     proc execChangeUser(conn: AsyncMysqlConnection): Future[void] =
@@ -486,12 +486,12 @@ commit;
 
       execChangeUser(conn, "mysql2", MysqlPassword, "mysql", DefaultClientCharset, finishCb)
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execChangeUser(conn)
       close(conn)
 
-    waitFor1 sendComQuery()   
+    waitFor1 main()   
 
   test "quit":
     proc execQuit(conn: AsyncMysqlConnection): Future[void] =
@@ -506,12 +506,12 @@ commit;
 
       execQuit(conn, finishCb)
 
-    proc sendComQuery() {.async.} =
+    proc main() {.async.} =
       var conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "mysql")
       await execQuit(conn)
       close(conn)
 
-    waitFor1 sendComQuery()   
+    waitFor1 main()   
 
 
 

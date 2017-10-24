@@ -101,10 +101,18 @@ proc openMysqlPool*(
       raise getCurrentException()
 
 proc close*(p: AsyncMysqlPool) =
-  for i in 0..<p.config.capacity:
+  for i in 0..<p.conns.len:
     if p.conns[i].conn != nil:
       close(p.conns[i].conn)
   setLen(p.conns, 0)
+
+proc countAvailableConnections*(p: AsyncMysqlPool): int =
+  result = 0
+  for i in 0..<p.conns.len:
+    if connIdle in p.conns[i].flags and 
+       p.conns[i].conn != nil and
+       not p.conns[i].conn.closed: 
+      inc(result)
 
 proc request*(p: AsyncMysqlPool, cb: RequestCb) = 
   proc task() {.async.} = 
