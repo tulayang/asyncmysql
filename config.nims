@@ -5,9 +5,9 @@ proc reGenDoc(filename: string) =
             replace(
               replace(readFile(filename), 
                       """href="/tree/master/asyncmysql""", 
-                      """href="https://github.com/tulayang/nimnode/tree/master/asyncmysql""" ),
+                      """href="https://github.com/tulayang/asyncmysql/tree/master/asyncmysql""" ),
               """href="/edit/devel/asyncmysql""",
-              """href="https://github.com/tulayang/nimnode/edit/master/asyncmysql""" ))
+              """href="https://github.com/tulayang/asyncmysql/edit/master/asyncmysql""" ))
 
 template runTest(name: string) =
   withDir thisDir():
@@ -25,6 +25,21 @@ template runBenchmark(name: string) =
     --o:"""bin/""" name
     --verbosity:0
     setCommand "c", "benchmark/" & name & ".nim"
+
+task doc, "Generate documentation":
+  for name in [
+    "error",  "query", "connection", "pool"
+  ]:
+    exec "nim doc2 -o:$outfile --docSeeSrcUrl:$url $file" % [
+      "outfile", thisDir() / "doc" / name & ".html",
+      "url",     "https://github.com/tulayang/asyncmysql/blob/master",
+      "file",    thisDir() / "asyncmysql" / name & ".nim"
+    ]
+    reGenDoc thisDir() / "doc" / name & ".html"
+  exec "nim rst2html -o:$outfile $file" % [
+    "outfile", thisDir() / "doc" / "index.html",
+    "file",    thisDir() / "doc" / "index.rst"
+  ]
 
 task test, "Run test tests":
   runTest "test"
