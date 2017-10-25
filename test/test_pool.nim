@@ -204,6 +204,8 @@ commit;
       ): Future[void] {.async.} =
         check err == nil
         check replies.len == 1
+
+        echo "  >> select val from sample where id = ?;"
         echo "  ", replies[0].packet
         check replies[0].packet.kind == rpkResultSet
         check replies[0].rows[0] == "100"
