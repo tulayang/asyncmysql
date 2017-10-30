@@ -4,7 +4,7 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import unittest, asyncmysql, util, mysqlparser, asyncdispatch, asyncnet, net
+import unittest, asyncmysql, util, mysqlparser, asyncdispatch, asyncnet, net, strutils
 
 const 
   MysqlHost = "127.0.0.1"
@@ -513,6 +513,92 @@ commit;
 
     waitFor1 main()   
 
+  test "inserting and selecting large results":
+    proc execCreateTable(conn: AsyncMysqlConnection): Future[void] =
+      var retFuture = newFuture[void]("test.execCreateTable")
+      result = retFuture
 
+      proc finishCb(
+        err: ref Exception,
+        replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+      ): Future[void] {.async.} =
+        check err == nil
+        check replies.len == 4
+        complete(retFuture)
 
+      execQuery(conn, sql("""
+        use test;
+        drop table if exists sample;
+        create table sample(id int unsigned not null auto_increment primary key, val longtext not null);
+        insert into sample(val) values (?);
+        """, repeatChar(1000000, 'a')), finishCb)
+         
+    proc execSelect(conn: AsyncMysqlConnection): Future[void] =
+      var retFuture = newFuture[void]("test.execSelect")
+      result = retFuture
+
+      proc finishCb(
+        err: ref Exception,
+        replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+      ): Future[void] {.async.} =
+        check err == nil
+        check replies.len == 1
+        complete(retFuture)
+         
+      execQuery(conn, sql("select * from sample"), finishCb)
+        
+    proc main() {.async.} =
+      let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "test")
+      await execCreateTable(conn)
+      await execSelect(conn)
+      close(conn)
+         
+    waitFor1 main()
+
+  test "inserting and selecting large results (streaming mode)":
+    proc execCreateTable(conn: AsyncMysqlConnection): Future[void] =
+      var retFuture = newFuture[void]("test.execCreateTable")
+      result = retFuture
+
+      proc finishCb(
+        err: ref Exception,
+        replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+      ): Future[void] {.async.} =
+        check err == nil
+        check replies.len == 4
+        complete(retFuture)
+
+      execQuery(conn, sql("""
+        use test;
+        drop table if exists sample;
+        create table sample(id int unsigned not null auto_increment primary key, val longtext not null);
+        insert into sample(val) values (?);
+        """, repeatChar(1000000, 'a')), finishCb)
+         
+    proc execSelect(conn: AsyncMysqlConnection): Future[void] =
+      var retFuture = newFuture[void]("test.execSelect")
+      result = retFuture
+
+      proc recvPacketCb(packet: ResultPacket): Future[void] {.async.} =
+        check packet.kind == rpkResultSet
+
+      proc recvPacketEndCb(): Future[void] {.async.} =
+        discard
+
+      proc recvFieldCb(field: string): Future[void] {.async.} =
+        discard
+
+      proc finishCb(err: ref Exception): Future[void] {.async.} =
+        check err == nil
+        complete(retFuture)
+
+      execQuery(conn, sql("select val from sample"), finishCb, recvPacketCb, recvPacketEndCb, recvFieldCb)
+       
+    proc main() {.async.} =
+      let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "test")
+      await execCreateTable(conn)
+      await execSelect(conn)
+      close(conn)
+         
+    waitFor1 main()
 

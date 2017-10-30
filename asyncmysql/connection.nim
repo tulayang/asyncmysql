@@ -4,31 +4,36 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import asyncdispatch, asyncnet, net, mysqlparser, error, query, strutils, deques
+## This module implements an connection abstraction, which can connect to the MySQL 
+## server by MqSQL Client/Server Protocol.
+
+import asyncdispatch, asyncnet, net, mysqlparser, error, query, capabilities, charset, strutils, deques
 
 # TODO: timeout
 
 const 
-  MysqlBufSize* = 1024 ## Size of the internal buffer used by mysql connection.
+  MysqlBufSize* = 1024 ## Size of the internal buffer that is used by mysql connection.
   
-  DefaultClientCharset* = CHARSET_UTF8_GENERAL_CI ## Default charset for mysql connection.
+  DefaultClientCharset* = charset.CHARSET_UTF8_GENERAL_CI 
+    ## Default charset used by MySQL Client/Server Protocol. This is called "collation" in the SQL-level of 
+    ## MySQL (like ``CHARSET_UTF8_GENERAL_CI``). 
   
-  DefaultClientCapabilities* =  ## Default capabilities for mysql connection.
-    CLIENT_LONG_PASSWORD    or  ## Use the improved version of Old Password Authentication.
-    CLIENT_FOUND_ROWS       or  ## Send found rows instead of affected rows.
-    CLIENT_LONG_FLAG        or  ## Get all column flags. Longer flags in Protocol::ColumnDefinition320.
-    CLIENT_CONNECT_WITH_DB  or  ## Database (schema) name can be specified on connect in Handshake Response Packet.
-    CLIENT_ODBC             or  ## Special handling of ODBC behavior.
-    CLIENT_LOCAL_FILES      or  ## Can use LOAD DATA LOCAL.
-    CLIENT_IGNORE_SPACE     or  ## Ignore spaces before '('.
-    CLIENT_PROTOCOL_41      or  ## Uses the 4.1 protocol.
-    CLIENT_IGNORE_SIGPIPE   or  ## Do not issue SIGPIPE if network failures occur. 
-    CLIENT_TRANSACTIONS     or  ## Client knows about transactions.
-    CLIENT_RESERVED         or  ## DEPRECATED: Old flag for 4.1 protocol.
-    CLIENT_RESERVED2        or  ## DEPRECATED: Old flag for 4.1 authentication.
-    CLIENT_PS_MULTI_RESULTS or  ## Multi-results and OUT parameters in PS-protocol.
-    CLIENT_MULTI_RESULTS    or  ## Enable multi-results for COM_QUERY.
-    CLIENT_MULTI_STATEMENTS 
+  DefaultClientCapabilities* =  ## Default client capabilities flag bitmask used by MySQL Client/Server Protocol. 
+    capabilities.CLIENT_LONG_PASSWORD    or  ## Use the improved version of Old Password Authentication.
+    capabilities.CLIENT_FOUND_ROWS       or  ## Send found rows instead of affected rows.
+    capabilities.CLIENT_LONG_FLAG        or  ## Get all column flags. Longer flags in Protocol::ColumnDefinition320.
+    capabilities.CLIENT_CONNECT_WITH_DB  or  ## Database (schema) name can be specified on connect in Handshake Response Packet.
+    capabilities.CLIENT_ODBC             or  ## Special handling of ODBC behavior.
+    capabilities.CLIENT_LOCAL_FILES      or  ## Can use LOAD DATA LOCAL.
+    capabilities.CLIENT_IGNORE_SPACE     or  ## Ignore spaces before '('.
+    capabilities.CLIENT_PROTOCOL_41      or  ## Uses the 4.1 protocol.
+    capabilities.CLIENT_IGNORE_SIGPIPE   or  ## Do not issue SIGPIPE if network failures occur. 
+    capabilities.CLIENT_TRANSACTIONS     or  ## Client knows about transactions.
+    capabilities.CLIENT_RESERVED         or  ## DEPRECATED: Old flag for 4.1 protocol.
+    capabilities.CLIENT_RESERVED2        or  ## DEPRECATED: Old flag for 4.1 authentication.
+    capabilities.CLIENT_PS_MULTI_RESULTS or  ## Multi-results and OUT parameters in PS-protocol.
+    capabilities.CLIENT_MULTI_RESULTS    or  ## Enable multi-results for COM_QUERY.
+    capabilities.CLIENT_MULTI_STATEMENTS 
 
 type
   RequestLock = Deque[Future[void]]
@@ -199,6 +204,7 @@ proc recvResultRows(conn: AsyncMysqlConnection, cmd: ServerCommand):
   moveBuf(conn)
 
 proc closed*(conn: AsyncMysqlConnection): bool = 
+  ## Returns whether ``conn`` is closed.
   result = conn.closed
 
 proc close*(conn: AsyncMysqlConnection) =
@@ -217,7 +223,21 @@ proc openMysqlConnection*(
   charset = DefaultClientCharset,
   capabilities = DefaultClientCapabilities
 ): Future[AsyncMysqlConnection] {.async.} =
-  ## Opens a new database connection.
+  ## Opens a new database connection. 
+  ##  
+  ## When establishing a connection, you can set the following options:
+  ## 
+  ## - ``domain`` - the protocol family of the underly socket for this connection.
+  ## - ``port`` - the port number to connect to.
+  ## - ``host`` - the hostname of the database you are connecting to.
+  ## - ``user`` - the MySQL user to authenticate as.
+  ## - ``password`` - the password of the MySQL user.
+  ## - ``database`` - name of the database to use for this connection.
+  ## - ``charset`` - the charset for the connection. (Default: ``DefaultClientCharset``). All available
+  ##   charset constants are in a sub-module called **charset**.
+  ## - ``capabilities`` - the client capabilitis which is a flag bitmask. (Default: ``DefaultClientCapabilities``). And
+  ##   this can be used to affect the connection's behavior. All available charset constants are in a sub-module 
+  ##   called **capabilities**.
   new(result)
   result.socket = newAsyncSocket(domain, SOCK_STREAM, IPPROTO_TCP, false)
   result.bufPos = 0
@@ -256,14 +276,62 @@ proc execQuery*(
   recvPacketEndCb: proc (): Future[void] {.closure, gcsafe.} = nil, 
   recvFieldCb: proc (field: string): Future[void] {.closure, gcsafe.} = nil
 ) =
-  ## Executes the SQL statements. ``field`` exposed which is a random length.
+  ## Executes the SQL statements in ``q``. 
   ## 
-  ## Notes: this proc applies to fields with small size. 
+  ## This proc is especially useful when dealing with large result sets. The query process 
+  ## is made up of many different stages. At each stage, a different callback proc is called:
   ## 
-  ## - ``recvPacketCb`` - called when a query is beginning.
+  ## - ``recvPacketCb`` - called when a SQL statement is beginning.
   ## - ``recvFieldCb`` - called when a full field is made.
-  ## - ``recvPacketEndCb`` - called when a query is finished.
-  ## - ``finishCb`` - called when all queries finished or occur some failed
+  ## - ``recvPacketEndCb`` - called when a SQL statement is finished.
+  ## - ``finishCb`` - called when all SQL statements are finished or occur some errors.
+  ## 
+  ## For example, when the following statements are executed:
+  ## 
+  ## .. code-block:: nim
+  ## 
+  ##   select host from user;
+  ##   select id from test;
+  ##   insert into test (name) values ('name1') where id = 1;
+  ## 
+  ## the query process is like this:
+  ## 
+  ##   1. packet stage
+  ## 
+  ##      receives a result packet from ``select host from user;``, calls ``recvPacketCb``, and the
+  ##      ``kind`` field of the argument ``packet`` is set to ``rpkResultSet``.  
+  ##   
+  ##   2. field stage
+  ## 
+  ##      receives a field(column) from ``select host from user;``, calls ``recvFieldCb``. Then, receives
+  ##      next field(column), calls ``recvFieldCb`` again. 
+  ## 
+  ##      ``recvFieldCb`` will be called again by again until
+  ##      there is no any field from ``select host from user;``.   
+  ## 
+  ##   3. packet stage
+  ## 
+  ##      receives a result packet from ``select id from test;``, calls ``recvPacketCb``, and the
+  ##      ``kind`` field of the argument ``packet`` is set to ``rpkResultSet``.  
+  ## 
+  ##   4. field stage
+  ## 
+  ##      receives a field(column) from ``select id from user;``, calls ``recvFieldCb``. Then, receives
+  ##      next field(column), calls ``recvFieldCb`` again. 
+  ## 
+  ##      ``recvFieldCb`` will be called again by again until
+  ##      there is no any field from ``select host from user;``.  
+  ## 
+  ##   5. packet stage
+  ## 
+  ##      receives a result packet from ``insert into test (name) values ('name1') where id = 1;``, calls 
+  ##      ``recvPacketCb``, and the ``kind`` field of the argument ``packet`` is set to ``rpkOk``.  
+  ## 
+  ##   6. finished stage
+  ## 
+  ##      all SQL statements are finished, calls ``finishCb``. 
+  ##     
+  ##      Notes: if any errors occur in the above steps, calls ``finishCb`` immediately and ignores other callback procs.
   proc exec() {.async.} =
     await send(conn.socket, formatComQuery(string(q)))
     while true:
@@ -276,6 +344,7 @@ proc execQuery*(
           var fieldBuf: string
           var fieldLen = 0
           var bufPos = 0
+          var empty = true
 
           if conn.parser.buffered:
             while true:
@@ -308,8 +377,10 @@ proc execQuery*(
                 break
 
           while true:
-            await recv(conn)
-            mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+            if empty:
+              await recv(conn)
+              mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+              empty = false
             let (offset, state) = parseRows(conn.parser, conn.resultPacket, 
                                             conn.handshakePacket.capabilities)
             case state
@@ -336,6 +407,7 @@ proc execQuery*(
               let d = fieldLen - bufPos
               if d > 0:
                 allocPasingField(conn.resultPacket, offsetChar(fieldBuf.cstring, bufPos), d)
+              empty = true
         else:
           moveBuf(conn)
           if recvPacketEndCb != nil:
@@ -365,13 +437,16 @@ proc execQuery*(
   recvFieldCb: proc (buffer: string): Future[void] {.closure, gcsafe.} = nil,
   recvFieldEndCb: proc (): Future[void] {.closure, gcsafe.} = nil
 ) =
-  ## Executes the SQL statements. This proc is efficient to deal with large fields.
+  ## Executes the SQL statements in ``q``. ``bufferSize`` specifies the size of field buffer.
   ## 
-  ## - ``recvPacketCb`` - called when a query is beginning.
-  ## - ``recvFieldCb`` - called when a field fill fully the internal buffer.
-  ## - ``recvFieldEndCb`` - called when a full field is made. 
-  ## - ``recvPacketEndCb`` - called when a query is finished.
-  ## ## - ``finishCb`` - called when all queries finished or occur some failed
+  ## This proc is especially useful when dealing with large result sets. The query process 
+  ## is made up of many different stages. At each stage, a different callback proc is called:
+  ## 
+  ## - ``recvPacketCb`` - called when a SQL statement is beginning.
+  ## - ``recvFieldCb`` - called when the content of a field fill fully the internal buffer.
+  ## - ``recvFieldEndCb`` - called when a full field is made.
+  ## - ``recvPacketEndCb`` - called when a SQL statement is finished.
+  ## - ``finishCb`` - called when all SQL statements are finished or an error occurs.
   proc exec() {.async.} =
     await send(conn.socket, formatComQuery(string(q)))
     var fieldBuf = newString(bufferSize)
@@ -383,6 +458,7 @@ proc execQuery*(
 
         if conn.resultPacket.kind == rpkResultSet and conn.resultPacket.hasRows:
           var bufPos = 0
+          var empty = true
 
           if conn.parser.buffered:
             while true:
@@ -418,8 +494,10 @@ proc execQuery*(
                 break
 
           while true:
-            await recv(conn)
-            mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+            if empty:
+              await recv(conn)
+              mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
+              empty = false
             let (offset, state) = parseRows(conn.parser, conn.resultPacket, 
                                             conn.handshakePacket.capabilities)
             case state
@@ -449,6 +527,7 @@ proc execQuery*(
               let d = bufferSize - bufPos
               if d > 0:
                 allocPasingField(conn.resultPacket, offsetChar(fieldBuf.cstring, bufPos), d)
+              empty = true
         else:
           moveBuf(conn)
           if recvPacketEndCb != nil:
@@ -476,8 +555,13 @@ proc execQuery*(
     replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
   ): Future[void] {.closure, gcsafe.}
 ) =
-  ## Executes the SQL statements. 
-  # type ResultLoad = tuple[packet: ResultPacket, rows: seq[string]]
+  ## Executes the SQL statements in ``q``. 
+  ## 
+  ## This proc places all the results in memory. When dealing with large result sets, this can be 
+  ## inefficient and take up a lot of memory, so you can try the other two ``execQuery`` procs
+  ## at this point. 
+  ## 
+  ## - ``finishCb`` - called when all SQL statements are finished or an error occurs.
   var replies: seq[tuple[packet: ResultPacket, rows: seq[string]]] = @[]
 
   proc exec() {.async.} =
@@ -506,8 +590,8 @@ proc execQuit*(
 ) =
   ## Notifies the mysql server that the connection is disconnected. Attempting to request
   ## the mysql server again will causes unknown errors.
-  ##
-  ## ``conn`` should then be closed immediately after that.
+  ## 
+  ## - ``finishCb`` - called when this task is finished or an error occurs.
   acquire(conn.lock).callback = proc (lockFuture: Future[void]) =
     assert lockFuture.failed == false
     send(conn.socket, formatComQuit()).callback = proc (execFuture: Future[void]) =
@@ -528,7 +612,9 @@ proc execInitDb*(
 ) =
   ## Changes the default database on the connection. 
   ##
-  ## Equivalent to ``use <database>;``
+  ## Equivalent to ``use <database>;`` 
+  ## 
+  ## - ``finishCb`` - called when this task is finished or an error occurs.
   proc exec() {.async.} =
     await send(conn.socket, formatComInitDb(database))
     await recvResultAck(conn, COM_INIT_DB)
@@ -559,6 +645,8 @@ proc execChangeUser*(
   ## Changes the user and causes the database specified by ``database`` to become the default (current) 
   ## database on the connection specified by mysql. In subsequent queries, this database is 
   ## the default for table references that include no explicit database specifier.
+  ## 
+  ## - ``finishCb`` - called when this task is finished or an error occurs.
   proc exec() {.async.} =
     await send(conn.socket, formatComChangeUser(
       ChangeUserPacket(

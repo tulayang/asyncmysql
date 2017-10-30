@@ -28,9 +28,9 @@ template runBenchmark(name: string) =
 
 task doc, "Generate documentation":
   for name in [
-    "error",  "query", "connection", "pool"
+    "error",  "query", "capabilities", "charset", "connection", "pool"
   ]:
-    exec "nim doc2 -o:$outfile --docSeeSrcUrl:$url $file" % [
+    exec "nim doc2 -d:asyncmysqldoc -o:$outfile --docSeeSrcUrl:$url $file" % [
       "outfile", thisDir() / "doc" / name & ".html",
       "url",     "https://github.com/tulayang/asyncmysql/blob/master",
       "file",    thisDir() / "asyncmysql" / name & ".nim"
