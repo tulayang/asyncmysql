@@ -592,7 +592,7 @@ commit;
         check err == nil
         complete(retFuture)
 
-      execQuery(conn, sql("select val from sample"), finishCb, recvPacketCb, recvPacketEndCb, recvFieldCb)
+      execQuery(conn, sql("select * from sample"), finishCb, recvPacketCb, recvPacketEndCb, recvFieldCb)
        
     proc main() {.async.} =
       let conn = await openMysqlConnection(AF_INET, MysqlPort, MysqlHost, MysqlUser, MysqlPassword, "test")
