@@ -61,4 +61,4 @@ commit;
   pool.close()
 ```
 
-(API Documentation)[http://tulayang.github.io/asyncmysql/index.html]
+[API Documentation](http://tulayang.github.io/asyncmysql/index.html)
