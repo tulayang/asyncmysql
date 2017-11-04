@@ -15,6 +15,8 @@ Asynchronous MySQL connector written in pure Nim. Releases are available as tags
 
   nimble install asyncmysql
 
+*This documentation is still being perfected.*
+
 Sub-modules
 ===========
 
@@ -24,14 +26,10 @@ Sub-modules
 * `query <query.html>`_
 
 
-* `capabilities <capabilities.html>`_
-
-
-* `charset <charset.html>`_
-  
-
 * `connection <connection.html>`_
   
 
 * `pool <pool.html>`_
   
+
+* `mysqlparser <http://tulayang.github.io/mysqlparser.html>`_

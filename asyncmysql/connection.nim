@@ -7,33 +7,33 @@
 ## This module implements an connection abstraction, which can connect to the MySQL 
 ## server by MqSQL Client/Server Protocol.
 
-import asyncdispatch, asyncnet, net, mysqlparser, error, query, capabilities, charset, strutils, deques
+import asyncdispatch, asyncnet, net, mysqlparser, error, query, strutils, deques
 
 # TODO: timeout
 
 const 
   MysqlBufSize* = 1024 ## Size of the internal buffer that is used by mysql connection.
   
-  DefaultClientCharset* = charset.CHARSET_UTF8_GENERAL_CI 
+  DefaultClientCharset* = CHARSET_UTF8_GENERAL_CI 
     ## Default charset used by MySQL Client/Server Protocol. This is called "collation" in the SQL-level of 
     ## MySQL (like ``CHARSET_UTF8_GENERAL_CI``). 
   
   DefaultClientCapabilities* =  ## Default client capabilities flag bitmask used by MySQL Client/Server Protocol. 
-    capabilities.CLIENT_LONG_PASSWORD    or  ## Use the improved version of Old Password Authentication.
-    capabilities.CLIENT_FOUND_ROWS       or  ## Send found rows instead of affected rows.
-    capabilities.CLIENT_LONG_FLAG        or  ## Get all column flags. Longer flags in Protocol::ColumnDefinition320.
-    capabilities.CLIENT_CONNECT_WITH_DB  or  ## Database (schema) name can be specified on connect in Handshake Response Packet.
-    capabilities.CLIENT_ODBC             or  ## Special handling of ODBC behavior.
-    capabilities.CLIENT_LOCAL_FILES      or  ## Can use LOAD DATA LOCAL.
-    capabilities.CLIENT_IGNORE_SPACE     or  ## Ignore spaces before '('.
-    capabilities.CLIENT_PROTOCOL_41      or  ## Uses the 4.1 protocol.
-    capabilities.CLIENT_IGNORE_SIGPIPE   or  ## Do not issue SIGPIPE if network failures occur. 
-    capabilities.CLIENT_TRANSACTIONS     or  ## Client knows about transactions.
-    capabilities.CLIENT_RESERVED         or  ## DEPRECATED: Old flag for 4.1 protocol.
-    capabilities.CLIENT_RESERVED2        or  ## DEPRECATED: Old flag for 4.1 authentication.
-    capabilities.CLIENT_PS_MULTI_RESULTS or  ## Multi-results and OUT parameters in PS-protocol.
-    capabilities.CLIENT_MULTI_RESULTS    or  ## Enable multi-results for COM_QUERY.
-    capabilities.CLIENT_MULTI_STATEMENTS 
+    CLIENT_LONG_PASSWORD    or  ## Use the improved version of Old Password Authentication.
+    CLIENT_FOUND_ROWS       or  ## Send found rows instead of affected rows.
+    CLIENT_LONG_FLAG        or  ## Get all column flags. Longer flags in Protocol::ColumnDefinition320.
+    CLIENT_CONNECT_WITH_DB  or  ## Database (schema) name can be specified on connect in Handshake Response Packet.
+    CLIENT_ODBC             or  ## Special handling of ODBC behavior.
+    CLIENT_LOCAL_FILES      or  ## Can use LOAD DATA LOCAL.
+    CLIENT_IGNORE_SPACE     or  ## Ignore spaces before '('.
+    CLIENT_PROTOCOL_41      or  ## Uses the 4.1 protocol.
+    CLIENT_IGNORE_SIGPIPE   or  ## Do not issue SIGPIPE if network failures occur. 
+    CLIENT_TRANSACTIONS     or  ## Client knows about transactions.
+    CLIENT_RESERVED         or  ## DEPRECATED: Old flag for 4.1 protocol.
+    CLIENT_RESERVED2        or  ## DEPRECATED: Old flag for 4.1 authentication.
+    CLIENT_PS_MULTI_RESULTS or  ## Multi-results and OUT parameters in PS-protocol.
+    CLIENT_MULTI_RESULTS    or  ## Enable multi-results for COM_QUERY.
+    CLIENT_MULTI_STATEMENTS 
 
 type
   RequestLock = Deque[Future[void]]
@@ -208,7 +208,8 @@ proc closed*(conn: AsyncMysqlConnection): bool =
   result = conn.closed
 
 proc close*(conn: AsyncMysqlConnection) =
-  ## Closes the database connection ``conn`` and releases the associated resources.
+  ## Closes the database connection ``conn`` and releases the associated resources. When a 
+  ## connection is no longer needed, the user should close it.
   if not conn.closed:
     conn.closed = true
     close(conn.socket)
@@ -282,7 +283,7 @@ proc execQuery*(
   ## is made up of many different stages. At each stage, a different callback proc is called:
   ## 
   ## - ``recvPacketCb`` - called when a SQL statement is beginning.
-  ## - ``recvFieldCb`` - called when a full field is made.
+  ## - ``recvFieldCb`` - called when a complete field is made.
   ## - ``recvPacketEndCb`` - called when a SQL statement is finished.
   ## - ``finishCb`` - called when all SQL statements are finished or occur some errors.
   ## 
@@ -444,7 +445,7 @@ proc execQuery*(
   ## 
   ## - ``recvPacketCb`` - called when a SQL statement is beginning.
   ## - ``recvFieldCb`` - called when the content of a field fill fully the internal buffer.
-  ## - ``recvFieldEndCb`` - called when a full field is made.
+  ## - ``recvFieldEndCb`` - called when a complete field is made.
   ## - ``recvPacketEndCb`` - called when a SQL statement is finished.
   ## - ``finishCb`` - called when all SQL statements are finished or an error occurs.
   proc exec() {.async.} =

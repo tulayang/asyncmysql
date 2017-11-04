@@ -16,7 +16,7 @@ suite "AsyncMysqlPool":
   test "open by 10 connections":
     proc main() {.async.} =
       let pool = await openMysqlPool(AF_INET, MysqlPort, MysqlHost, MysqlUser, 
-                                   MysqlPassword, "mysql", capacity=10)
+                                   MysqlPassword, "mysql", connectionLimit=10)
       check pool.countAvailableConnections == 10
       close(pool)
       check pool.countAvailableConnections == 0
@@ -105,7 +105,7 @@ commit;
 
     proc main() {.async.} =
       let pool = await openMysqlPool(AF_INET, MysqlPort, MysqlHost, MysqlUser, 
-                                   MysqlPassword, "mysql", capacity=10)
+                                   MysqlPassword, "mysql", connectionLimit=10)
       await execTasks(pool)
       close(pool)
 
@@ -220,18 +220,18 @@ commit;
       var retFuture = newFuture[void]("test.execTransaction")
       result = retFuture
 
-      proc RequestCb(conn: AsyncMysqlConnection) {.async.} =
+      proc RequestCb(conn: AsyncMysqlConnection, connIx: int) {.async.} =
         await execCreateTable(conn)
         await execTransaction(conn)
         await execReselect(conn)
-        callSoon() do():
-          complete(retFuture)
+        release(pool, connIx)
+        complete(retFuture)
 
       request(pool, RequestCb)
 
     proc main() {.async.} =
       let pool = await openMysqlPool(AF_INET, MysqlPort, MysqlHost, MysqlUser, 
-                                     MysqlPassword, "mysql", capacity=10)
+                                     MysqlPassword, "mysql", connectionLimit=10)
       await request(pool)
       close(pool)
 
