@@ -531,7 +531,7 @@ commit;
         drop table if exists sample;
         create table sample(id int unsigned not null auto_increment primary key, val longtext not null);
         insert into sample(val) values (?);
-        """, repeatChar(1000000, 'a')), finishCb)
+        """, "a".repeat(1000000)), finishCb)
          
     proc execSelect(conn: AsyncMysqlConnection): Future[void] =
       var retFuture = newFuture[void]("test.execSelect")
@@ -573,7 +573,7 @@ commit;
         drop table if exists sample;
         create table sample(id int unsigned not null auto_increment primary key, val longtext not null);
         insert into sample(val) values (?);
-        """, repeatChar(1000000, 'a')), finishCb)
+        """, "a".repeat(1000000)), finishCb)
          
     proc execSelect(conn: AsyncMysqlConnection): Future[void] =
       var retFuture = newFuture[void]("test.execSelect")

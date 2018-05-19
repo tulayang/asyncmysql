@@ -127,7 +127,7 @@ template asyncRecvFields(conn: AsyncMysqlConnection) =
       if finished:
         break
 
-template asyncRecvRows(conn: AsyncMysqlConnection, rows: seq[string]) =
+template asyncRecvRows(conn: AsyncMysqlConnection, rows: seq[TaintedString]) =
   var rowList = initRowList()
   var finished = false
   if conn.parser.buffered:
@@ -275,7 +275,7 @@ proc execQuery*(
   finishCb: proc (err: ref Exception): Future[void] {.closure, gcsafe.},
   recvPacketCb: proc (packet: ResultPacket): Future[void] {.closure, gcsafe.} = nil,
   recvPacketEndCb: proc (): Future[void] {.closure, gcsafe.} = nil, 
-  recvFieldCb: proc (field: string): Future[void] {.closure, gcsafe.} = nil
+  recvFieldCb: proc (field: TaintedString): Future[void] {.closure, gcsafe.} = nil
 ) =
   ## Executes the SQL statements in ``q``. 
   ## 
@@ -435,7 +435,7 @@ proc execQuery*(
   finishCb: proc (err: ref Exception): Future[void] {.closure, gcsafe.}, 
   recvPacketCb: proc (packet: ResultPacket): Future[void] {.closure, gcsafe.} = nil,
   recvPacketEndCb: proc (): Future[void] {.closure, gcsafe.} = nil,
-  recvFieldCb: proc (buffer: string): Future[void] {.closure, gcsafe.} = nil,
+  recvFieldCb: proc (buffer: TaintedString): Future[void] {.closure, gcsafe.} = nil,
   recvFieldEndCb: proc (): Future[void] {.closure, gcsafe.} = nil
 ) =
   ## Executes the SQL statements in ``q``. ``bufferSize`` specifies the size of field buffer.
@@ -553,7 +553,7 @@ proc execQuery*(
   q: SqlQuery, 
   finishCb: proc (
     err: ref Exception, 
-    replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+    replies: seq[tuple[packet: ResultPacket, rows: seq[TaintedString]]]
   ): Future[void] {.closure, gcsafe.}
 ) =
   ## Executes the SQL statements in ``q``. 
@@ -563,7 +563,7 @@ proc execQuery*(
   ## at this point. 
   ## 
   ## - ``finishCb`` - called when all SQL statements are finished or an error occurs.
-  var replies: seq[tuple[packet: ResultPacket, rows: seq[string]]] = @[]
+  var replies: seq[tuple[packet: ResultPacket, rows: seq[TaintedString]]] = @[]
 
   proc exec() {.async.} =
     await send(conn.socket, formatComQuery(string(q)))

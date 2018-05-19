@@ -165,7 +165,7 @@ proc request*(p: AsyncMysqlPool, cb: RequestCb) =
   ##
   ##       proc finishCb(
   ##         err: ref Exception, 
-  ##         replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+  ##         replies: seq[tuple[packet: ResultPacket, rows: seq[TaintedString]]]
   ##       ) {.async.} =
   ##         ##     do something if needed ... 
   ##         if err == nil: 
@@ -181,7 +181,7 @@ proc request*(p: AsyncMysqlPool, cb: RequestCb) =
   ##      
   ##       proc finishCb(
   ##         err: ref Exception, 
-  ##         replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+  ##         replies: seq[tuple[packet: ResultPacket, rows: seq[TaintedString]]]
   ##       ) {.async.} =
   ##         ##     do something
   ##         if err == nil: 
@@ -233,7 +233,7 @@ proc execQuery*(
   finishCb: proc (err: ref Exception): Future[void] {.closure, gcsafe.},
   recvPacketCb: proc (packet: ResultPacket): Future[void] {.closure, gcsafe.} = nil,
   recvPacketEndCb: proc (): Future[void] {.closure, gcsafe.} = nil, 
-  recvFieldCb: proc (field: string): Future[void] {.closure, gcsafe.} = nil
+  recvFieldCb: proc (field: TaintedString): Future[void] {.closure, gcsafe.} = nil
 ) =
   ## Executes the SQL statements in ``q``. 
   ## 
@@ -310,7 +310,7 @@ proc execQuery*(
   finishCb: proc (err: ref Exception): Future[void] {.closure, gcsafe.}, 
   recvPacketCb: proc (packet: ResultPacket): Future[void] {.closure, gcsafe.} = nil,
   recvPacketEndCb: proc (): Future[void] {.closure, gcsafe.} = nil,
-  recvFieldCb: proc (buffer: string): Future[void] {.closure, gcsafe.} = nil,
+  recvFieldCb: proc (buffer: TaintedString): Future[void] {.closure, gcsafe.} = nil,
   recvFieldEndCb: proc (): Future[void] {.closure, gcsafe.} = nil
 ) =
   ## Executes the SQL statements in ``q``. ``bufferSize`` specifies the size of field buffer.
@@ -340,7 +340,7 @@ proc execQuery*(
   q: SqlQuery, 
   finishCb: proc (
     err: ref Exception, 
-    replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+    replies: seq[tuple[packet: ResultPacket, rows: seq[TaintedString]]]
   ): Future[void] {.closure, gcsafe.}
 ) =
   ## Executes the SQL statements in ``q``. 
@@ -355,7 +355,7 @@ proc execQuery*(
     result = retFuture
     proc finishWrapCb(
       err: ref Exception, 
-      replies: seq[tuple[packet: ResultPacket, rows: seq[string]]]
+      replies: seq[tuple[packet: ResultPacket, rows: seq[TaintedString]]]
     ) {.async.} =
       await finishCb(err, replies)
       if err != nil:
