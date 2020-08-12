@@ -70,6 +70,9 @@ suite "AsyncMysqlConnection":
           discard
 
       proc finishCb(err: ref Exception): Future[void] {.async.} =
+        if err != nil:
+          echo "  >>> first error"
+          echo $err.msg
         check err == nil
         complete(retFuture)
 
