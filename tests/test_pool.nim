@@ -4,7 +4,7 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import unittest, ../asyncmysql, util, mysqlparser, asyncdispatch, net
+import unittest, ../asyncmysql, ./util, mysqlparser, asyncdispatch, net
 
 const 
   MysqlHost = "127.0.0.1"
@@ -144,7 +144,7 @@ commit;
         echo "  >>> rollback;"
         echo "  ", replies[0].packet
         check replies[0].packet.kind == rpkOk
-        check replies[0].rows == nil
+        check replies[0].rows.len == 0
         complete(retFuture)
 
       execQuery(conn, sql("""
@@ -165,7 +165,7 @@ commit;
         echo "  >>> strart transaction;"
         echo "  ", replies[0].packet
         check replies[0].packet.kind == rpkOk
-        check replies[0].rows == nil
+        check replies[0].rows.len == 0
        
         echo "  >>> select val from sample where id = ?;"
         echo "  ", replies[1].packet
@@ -176,12 +176,12 @@ commit;
         echo "  >>> update sample set val = 1 where id = ?;"
         echo "  ", replies[2].packet
         check replies[2].packet.kind == rpkOk
-        check replies[2].rows == nil
+        check replies[2].rows.len == 0
 
         echo "  >>> insert into sample (val) values (200),,,;"
         echo "  ", replies[3].packet
         check replies[3].packet.kind == rpkError
-        check replies[3].rows == nil
+        check replies[3].rows.len == 0
 
         await execRollback(conn)
         complete(retFuture)
