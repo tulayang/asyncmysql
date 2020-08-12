@@ -5,6 +5,8 @@ matrix:
     # Build and test against the master (stable) and devel branches of Nim
     - os: linux
       compiler: gcc
+      services:
+        mysql
 
     # On OSX we only test against clang (gcc is mapped to clang by default)
     - os: osx
@@ -17,8 +19,6 @@ matrix:
     - os: osx
   fast_finish: true
 
-services:
-  mysql
 
 before_install:
   - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
