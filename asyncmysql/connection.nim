@@ -92,14 +92,14 @@ proc asyncRecvResultHeader(conn: AsyncMysqlConnection) {.async.} =
         break
 
 
-template asyncRecvRows(conn: AsyncMysqlConnection, rows: seq[string]) =
+template asyncRecvRows(conn: AsyncMysqlConnection, rows: var seq[string]) =
   var rowList = initRowList()
   var finished = false
   if conn.parser.buffered:
     finished = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, rowList)
   if not finished:  
     while true:
-      yield recv(conn)
+      await recv(conn)
       mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
       finished = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, rowList)
       if finished:
