@@ -78,33 +78,33 @@ template moveBuf(conn: AsyncMysqlConnection) =
   inc(conn.bufPos, conn.parser.offset)
   dec(conn.bufLen, conn.parser.offset)
 
-proc asyncRecvResultHeader(conn: AsyncMysqlConnection) {.async.} =
+template asyncRecvResultHeader(conn: AsyncMysqlConnection) =
   var finished = false
   if conn.bufLen > 0:
     mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
     finished = parseResultHeader(conn.parser, conn.resultPacket)
   if not finished:  
     while true:
-      await recv(conn)
+      yield recv(conn)
       mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
       finished = parseResultHeader(conn.parser, conn.resultPacket)
       if finished:
         break
 
 
-proc asyncRecvRows(conn: AsyncMysqlConnection): Future[seq[string]] {.async.} =
+template asyncRecvRows(conn: AsyncMysqlConnection, rows: seq[string]) =
   var rowList = initRowList()
   var finished = false
   if conn.parser.buffered:
     finished = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, rowList)
   if not finished:  
     while true:
-      await recv(conn)
+      yield recv(conn)
       mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
       finished = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, rowList)
       if finished:
         break
-  return rowList.value
+  shallowCopy(rows, rowList.value)
 
 proc recvHandshakeInit(conn: AsyncMysqlConnection): Future[void] {.async.} =
   conn.parser = initPacketParser(ppkHandshake)
@@ -118,7 +118,7 @@ proc recvHandshakeInit(conn: AsyncMysqlConnection): Future[void] {.async.} =
 
 proc recvHandshakeAck(conn: AsyncMysqlConnection): Future[void] {.async.} =
   conn.parser = initPacketParser(ppkHandshake) 
-  await asyncRecvResultHeader(conn)
+  asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
     asyncRecv(conn, rpkOk)
@@ -131,7 +131,7 @@ proc recvHandshakeAck(conn: AsyncMysqlConnection): Future[void] {.async.} =
 
 proc recvResultBase(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void] {.async.} = 
   conn.parser = initPacketParser(cmd) 
-  await asyncRecvResultHeader(conn)
+  asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
     asyncRecv(conn, rpkOk)
@@ -143,7 +143,7 @@ proc recvResultBase(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void
 
 proc recvResultAck(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void] {.async.} = 
   conn.parser = initPacketParser(cmd) 
-  await asyncRecvResultHeader(conn)
+  asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
     asyncRecv(conn, rpkOk)
@@ -156,7 +156,7 @@ proc recvResultAck(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void]
 proc recvResultRows(conn: AsyncMysqlConnection, cmd: ServerCommand): 
     Future[seq[string]] {.async.} =
   conn.parser = initPacketParser(cmd) 
-  await asyncRecvResultHeader(conn)
+  asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
     asyncRecv(conn, rpkOk)
@@ -165,7 +165,7 @@ proc recvResultRows(conn: AsyncMysqlConnection, cmd: ServerCommand):
   of rpkResultSet:
     asyncRecv(conn, rpkResultSet)
     if conn.resultPacket.hasRows:
-      return await asyncRecvRows(conn)
+      asyncRecvRows(conn, result)
   moveBuf(conn)
 
 proc closed*(conn: AsyncMysqlConnection): bool = 
