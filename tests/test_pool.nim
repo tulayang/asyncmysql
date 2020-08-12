@@ -4,7 +4,7 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import unittest, asyncmysql, util, mysqlparser, asyncdispatch, asyncnet, net
+import unittest, ../asyncmysql, util, mysqlparser, asyncdispatch, net
 
 const 
   MysqlHost = "127.0.0.1"
@@ -220,14 +220,14 @@ commit;
       var retFuture = newFuture[void]("test.execTransaction")
       result = retFuture
 
-      proc RequestCb(conn: AsyncMysqlConnection, connIx: int) {.async.} =
+      proc requestCb(conn: AsyncMysqlConnection, connIx: int) {.async.} =
         await execCreateTable(conn)
         await execTransaction(conn)
         await execReselect(conn)
         release(pool, connIx)
         complete(retFuture)
 
-      request(pool, RequestCb)
+      request(pool, requestCb)
 
     proc main() {.async.} =
       let pool = await openMysqlPool(AF_INET, MysqlPort, MysqlHost, MysqlUser, 
