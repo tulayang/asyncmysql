@@ -66,30 +66,30 @@ macro asyncRecv*(conn: untyped, kind: untyped): untyped =
               nnkYieldStmt.newTree(
                 nnkCall.newTree(
                   newIdentNode("recv"),
-                  newIdentNode("conn")
+                  conn
                 )
               ),
               nnkCall.newTree(
                 newIdentNode("mount"),
                 nnkDotExpr.newTree(
-                  newIdentNode("conn"),
+                  conn,
                   newIdentNode("parser")
                 ),
                 nnkDotExpr.newTree(
                   nnkBracketExpr.newTree(
                     nnkDotExpr.newTree(
-                      newIdentNode("conn"),
+                      conn,
                       newIdentNode("buf")
                     ),
                     nnkDotExpr.newTree(
-                      newIdentNode("conn"),
+                      conn,
                       newIdentNode("bufPos")
                     )
                   ),
                   newIdentNode("addr")
                 ),
                 nnkDotExpr.newTree(
-                  newIdentNode("conn"),
+                  conn,
                   newIdentNode("bufLen")
                 )
               ),
@@ -98,16 +98,16 @@ macro asyncRecv*(conn: untyped, kind: untyped): untyped =
                 nnkCall.newTree(
                   prcIdent,
                   nnkDotExpr.newTree(
-                    newIdentNode("conn"),
+                    conn,
                     newIdentNode("parser")
                   ),
                   nnkDotExpr.newTree(
-                    newIdentNode("conn"),
+                    conn,
                     newIdentNode("resultPacket")
                   ),
                   nnkDotExpr.newTree(
                     nnkDotExpr.newTree(
-                      newIdentNode("conn"),
+                      conn,
                       newIdentNode("handshakePacket")
                     ),
                     newIdentNode("capabilities")
