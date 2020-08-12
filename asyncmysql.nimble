@@ -6,7 +6,7 @@ license = "MIT"
 skipFiles = @["TODO.md"]
 
 # Dependencies
-requires "nim >= 0.19.0", "mysqlparser >= 0.2.0"
+requires "nim >= 0.19.0", "mysqlparser#head"
 
 import ospaths, strutils
 

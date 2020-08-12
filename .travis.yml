@@ -1,5 +1,5 @@
 language: c
-cache: false
+
 matrix:
   include:
     # Build and test against the master (stable) and devel branches of Nim

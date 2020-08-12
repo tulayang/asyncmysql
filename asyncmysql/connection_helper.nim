@@ -64,7 +64,7 @@ macro asyncRecv*(conn: untyped, kind: untyped): untyped =
             newIdentNode("true"),
             nnkStmtList.newTree(
               nnkCommand.newTree(
-                newIdentNode("yield"),
+                newIdentNode("await"),
                 nnkCall.newTree(
                   newIdentNode("recv"),
                   newIdentNode("conn")

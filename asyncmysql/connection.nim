@@ -78,14 +78,14 @@ template moveBuf(conn: AsyncMysqlConnection) =
   inc(conn.bufPos, conn.parser.offset)
   dec(conn.bufLen, conn.parser.offset)
 
-proc asyncRecvResultHeader(conn: AsyncMysqlConnection) =
+proc asyncRecvResultHeader(conn: AsyncMysqlConnection) {.async.} =
   var finished = false
   if conn.bufLen > 0:
     mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
     finished = parseResultHeader(conn.parser, conn.resultPacket)
   if not finished:  
     while true:
-      yield recv(conn)
+      await recv(conn)
       mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
       finished = parseResultHeader(conn.parser, conn.resultPacket)
       if finished:
@@ -118,7 +118,7 @@ proc recvHandshakeInit(conn: AsyncMysqlConnection): Future[void] {.async.} =
 
 proc recvHandshakeAck(conn: AsyncMysqlConnection): Future[void] {.async.} =
   conn.parser = initPacketParser(ppkHandshake) 
-  asyncRecvResultHeader(conn)
+  await asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
     asyncRecv(conn, rpkOk)
@@ -131,7 +131,7 @@ proc recvHandshakeAck(conn: AsyncMysqlConnection): Future[void] {.async.} =
 
 proc recvResultBase(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void] {.async.} = 
   conn.parser = initPacketParser(cmd) 
-  asyncRecvResultHeader(conn)
+  await asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
     asyncRecv(conn, rpkOk)
@@ -143,7 +143,7 @@ proc recvResultBase(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void
 
 proc recvResultAck(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void] {.async.} = 
   conn.parser = initPacketParser(cmd) 
-  asyncRecvResultHeader(conn)
+  await asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
     asyncRecv(conn, rpkOk)
@@ -156,7 +156,7 @@ proc recvResultAck(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void]
 proc recvResultRows(conn: AsyncMysqlConnection, cmd: ServerCommand): 
     Future[seq[string]] {.async.} =
   conn.parser = initPacketParser(cmd) 
-  asyncRecvResultHeader(conn)
+  await asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
     asyncRecv(conn, rpkOk)
