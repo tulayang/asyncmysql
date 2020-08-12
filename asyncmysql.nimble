@@ -6,4 +6,4 @@ license = "MIT"
 skipFiles = @["TODO.md"]
 
 # Dependencies
-requires "nim >= 0.19.0", "mysqlparser >= 0.2.1"
+requires "nim >= 0.19.0", "mysqlparser >= 0.2.0"
