@@ -92,7 +92,7 @@ proc asyncRecvResultHeader(conn: AsyncMysqlConnection) {.async.} =
         break
 
 
-proc asyncRecvRows(conn: AsyncMysqlConnection, rows: var seq[string]) {.async.} =
+proc asyncRecvRows(conn: AsyncMysqlConnection): Future[seq[string]] {.async.} =
   var rowList = initRowList()
   var finished = false
   if conn.parser.buffered:
@@ -104,7 +104,7 @@ proc asyncRecvRows(conn: AsyncMysqlConnection, rows: var seq[string]) {.async.} 
       finished = parseRows(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities, rowList)
       if finished:
         break
-  shallowCopy(rows, rowList.value)
+  return rowList.value
 
 proc recvHandshakeInit(conn: AsyncMysqlConnection): Future[void] {.async.} =
   conn.parser = initPacketParser(ppkHandshake)
@@ -165,7 +165,7 @@ proc recvResultRows(conn: AsyncMysqlConnection, cmd: ServerCommand):
   of rpkResultSet:
     asyncRecv(conn, rpkResultSet)
     if conn.resultPacket.hasRows:
-      await asyncRecvRows(conn, result)
+      return await asyncRecvRows(conn)
   moveBuf(conn)
 
 proc closed*(conn: AsyncMysqlConnection): bool = 
