@@ -47,6 +47,6 @@ install:
   - nimble install -d -y
 
 script:
-  - nim test
+  - nimble test
   
   
