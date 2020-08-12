@@ -44,7 +44,7 @@ install:
   - ./koch nimble
   - export PATH=$(pwd)/bin:$PATH
   - cd ..
-  - nimble install -y
+  - nimble install -d -y
 
 script:
   - nim test
