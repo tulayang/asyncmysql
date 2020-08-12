@@ -9,10 +9,10 @@ proc dbQuote*(s: string): string =
     else: add(result, c)
   add(result, '\'')
 
-proc dbFormat(formatstr: SqlQuery, args: varargs[string]): string =
+proc dbFormat(formatstr: string, args: varargs[string]): string =
   result = ""
   var a = 0
-  for c in items(string(formatstr)):
+  for c in items(formatstr):
     if c == '?':
       add(result, dbQuote(args[a]))
       inc(a)
