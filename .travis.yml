@@ -12,22 +12,15 @@ matrix:
     - os: osx
       env: CHANNEL=stable
       compiler: clang
-      sudo: required
+      before_install:
+        - brew install mysql
+        - mysql.server start
 
   allow_failures:
     # Ignore failures when building against the devel Nim branch
     # Also ignore OSX, due to very long build queue
     - os: osx
   fast_finish: true
-
-before_install:
-  # osx   - MySQL      - 5.7.21
-  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then brew update-reset                                                                            ; fi
-  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then brew install mysql                                                                           ; fi
-  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then brew services start mysql                                                                    ; fi
-  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then sudo chown -R _mysql:_mysql /usr/local/opt/mysql/                                            ; fi
-  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then mysql.server start                                                                           ; fi
-  # - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then sleep 0.1                                                                                    ; fi
 
 before_script:
   - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
