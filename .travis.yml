@@ -12,6 +12,7 @@ matrix:
     - os: osx
       env: CHANNEL=stable
       compiler: clang
+      sudo: required
 
   allow_failures:
     # Ignore failures when building against the devel Nim branch
@@ -19,10 +20,13 @@ matrix:
     - os: osx
   fast_finish: true
 
-
 before_install:
   - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
       HOMEBREW_NO_AUTO_UPDATE=1 brew install mysql;
+    fi
+
+before_script:
+  - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
       mysql.server start; 
     fi
   - mysql -h 127.0.0.1 -u root -e "create database if not exists test;"
