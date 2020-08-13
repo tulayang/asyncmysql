@@ -4,7 +4,7 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import unittest, asyncmysql, util, mysqlparser, asyncdispatch, asyncnet, net, strutils
+import unittest, ../asyncmysql, util, mysqlparser, asyncdispatch, asyncnet, net, strutils
 
 const 
   MysqlHost = "127.0.0.1"
@@ -70,6 +70,9 @@ suite "AsyncMysqlConnection":
           discard
 
       proc finishCb(err: ref Exception): Future[void] {.async.} =
+        if err != nil:
+          echo "  >>> first error"
+          echo $err.msg
         check err == nil
         complete(retFuture)
 
@@ -188,7 +191,7 @@ commit;
         echo "  >>> strart transaction;"
         echo "  ", replies[0].packet
         check replies[0].packet.kind == rpkOk
-        check replies[0].rows == nil
+        check replies[0].rows.len == 0
        
         echo "  >>> select host, user from user where user = ?;"
         echo "  ", replies[1].packet
@@ -203,7 +206,7 @@ commit;
         echo "  >>> commit;"
         echo "  ", replies[3].packet
         check replies[3].packet.kind == rpkOk
-        check replies[3].rows == nil
+        check replies[3].rows.len == 0
 
         complete(retFuture)
 
@@ -254,7 +257,7 @@ commit;
         echo "  >>> rollback;"
         echo "  ", replies[0].packet
         check replies[0].packet.kind == rpkOk
-        check replies[0].rows == nil
+        check replies[0].rows.len == 0
         complete(retFuture)
 
       execQuery(conn, sql("""
@@ -275,7 +278,7 @@ commit;
         echo "  >>> strart transaction;"
         echo "  ", replies[0].packet
         check replies[0].packet.kind == rpkOk
-        check replies[0].rows == nil
+        check replies[0].rows.len == 0
        
         echo "  >>> select val from sample where id = ?;"
         echo "  ", replies[1].packet
@@ -286,12 +289,12 @@ commit;
         echo "  >>> update sample set val = 1 where id = ?;"
         echo "  ", replies[2].packet
         check replies[2].packet.kind == rpkOk
-        check replies[2].rows == nil
+        check replies[2].rows.len == 0
 
         echo "  >>> insert into sample (val) values (200),,,;"
         echo "  ", replies[3].packet
         check replies[3].packet.kind == rpkError
-        check replies[3].rows == nil
+        check replies[3].rows.len == 0
 
         await execRollback(conn)
         complete(retFuture)
@@ -408,7 +411,7 @@ commit;
         echo "  ", replies[0].packet
         check err == nil
         check replies[0].packet.kind == rpkOk
-        check replies[0].rows == nil
+        check replies[0].rows.len == 0
         complete(retFuture)
 
       execQuery(conn, sql"use test", finishCb)
@@ -425,7 +428,7 @@ commit;
         echo "  ", replies[0].packet
         check err == nil
         check replies[0].packet.kind == rpkError
-        check replies[0].rows == nil
+        check replies[0].rows.len == 0
         complete(retFuture)
 
       execQuery(conn, sql"select * from user;", finishCb)
@@ -531,7 +534,7 @@ commit;
         drop table if exists sample;
         create table sample(id int unsigned not null auto_increment primary key, val longtext not null);
         insert into sample(val) values (?);
-        """, repeatChar(1000000, 'a')), finishCb)
+        """, repeat('a', 1000000)), finishCb)
          
     proc execSelect(conn: AsyncMysqlConnection): Future[void] =
       var retFuture = newFuture[void]("test.execSelect")
@@ -573,7 +576,7 @@ commit;
         drop table if exists sample;
         create table sample(id int unsigned not null auto_increment primary key, val longtext not null);
         insert into sample(val) values (?);
-        """, repeatChar(1000000, 'a')), finishCb)
+        """, repeat('a', 1000000)), finishCb)
          
     proc execSelect(conn: AsyncMysqlConnection): Future[void] =
       var retFuture = newFuture[void]("test.execSelect")

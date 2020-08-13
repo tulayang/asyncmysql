@@ -7,7 +7,7 @@
 ## This module implements an connection abstraction, which can connect to the MySQL 
 ## server by MqSQL Client/Server Protocol.
 
-import asyncdispatch, asyncnet, net, mysqlparser, error, query, strutils, deques
+import asyncdispatch, asyncnet, net, mysqlparser, ./connection_helper, ./error, ./query, deques, macros
 
 # TODO: timeout
 
@@ -91,41 +91,6 @@ template asyncRecvResultHeader(conn: AsyncMysqlConnection) =
       if finished:
         break
 
-template asyncRecvOk(conn: AsyncMysqlConnection) =
-  var finished = false
-  if conn.parser.buffered:
-    finished = parseOk(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
-  if not finished:  
-    while true:
-      yield recv(conn)
-      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
-      finished = parseOk(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
-      if finished:
-        break
-
-template asyncRecvError(conn: AsyncMysqlConnection) =
-  var finished = false
-  if conn.parser.buffered:
-    finished = parseError(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
-  if not finished:  
-    while true:
-      yield recv(conn)
-      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
-      finished = parseError(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
-      if finished:
-        break
-
-template asyncRecvFields(conn: AsyncMysqlConnection) =
-  var finished = false
-  if conn.parser.buffered:
-    finished = parseFields(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
-  if not finished:  
-    while true:
-      yield recv(conn)
-      mount(conn.parser, conn.buf[conn.bufPos].addr, conn.bufLen)
-      finished = parseFields(conn.parser, conn.resultPacket, conn.handshakePacket.capabilities)
-      if finished:
-        break
 
 template asyncRecvRows(conn: AsyncMysqlConnection, rows: seq[string]) =
   var rowList = initRowList()
@@ -156,9 +121,9 @@ proc recvHandshakeAck(conn: AsyncMysqlConnection): Future[void] {.async.} =
   asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    asyncRecvOk(conn)
+    asyncRecv(conn, rpkOk)
   of rpkError:
-    asyncRecvError(conn)
+    asyncRecv(conn, rpkError)
     raiseMysqlError(conn.resultPacket.errorMessage)
   of rpkResultSet:
     raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
@@ -169,11 +134,11 @@ proc recvResultBase(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void
   asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    asyncRecvOk(conn)
+    asyncRecv(conn, rpkOk)
   of rpkError:
-    asyncRecvError(conn)
+    asyncRecv(conn, rpkError)
   of rpkResultSet:
-    asyncRecvFields(conn)
+    asyncRecv(conn, rpkResultSet)
     # recv body then ...
 
 proc recvResultAck(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void] {.async.} = 
@@ -181,9 +146,9 @@ proc recvResultAck(conn: AsyncMysqlConnection, cmd: ServerCommand): Future[void]
   asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    asyncRecvOk(conn)
+    asyncRecv(conn, rpkOk)
   of rpkError:
-    asyncRecvError(conn)
+    asyncRecv(conn, rpkError)
   of rpkResultSet:
     raiseMysqlError("unexpected result packet kind 'rpkResultSet'")
   moveBuf(conn)
@@ -194,11 +159,11 @@ proc recvResultRows(conn: AsyncMysqlConnection, cmd: ServerCommand):
   asyncRecvResultHeader(conn)
   case conn.resultPacket.kind
   of rpkOk:
-    asyncRecvOk(conn)
+    asyncRecv(conn, rpkOk)
   of rpkError:
-    asyncRecvError(conn)
+    asyncRecv(conn, rpkError)
   of rpkResultSet:
-    asyncRecvFields(conn)
+    asyncRecv(conn, rpkResultSet)
     if conn.resultPacket.hasRows:
       asyncRecvRows(conn, result)
   moveBuf(conn)

@@ -1,41 +1,49 @@
 language: c
-os:
-  - linux
-  - osx
 
-compiler:
-  - gcc
+matrix:
+  include:
+    # Build and test against the master (stable) and devel branches of Nim
+    - os: linux
+      env: CHANNEL=stable
+      compiler: gcc
+      services:
+        mysql
 
-services:
-  mysql
+    # On OSX we only test against clang (gcc is mapped to clang by default)
+    - os: osx
+      env: CHANNEL=stable
+      compiler: clang
+      before_install:
+        - brew install mysql
+        - mysql.server start
 
-before_install:
+  allow_failures:
+    # Ignore failures when building against the devel Nim branch
+    # Also ignore OSX, due to very long build queue
+    - os: osx
+  fast_finish: true
+
+before_script:
   - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
-      HOMEBREW_NO_AUTO_UPDATE=1 brew install mysql;
       mysql.server start; 
     fi
   - mysql -h 127.0.0.1 -u root -e "create database if not exists test;"
   - mysql -h 127.0.0.1 -u root -e "create user 'mysql'@'127.0.0.1' identified by '123456';"
-  - mysql -h 127.0.0.1 -u root -e "grant all on *.* to 'mysql'@'127.0.0.1' identified by '123456';"
+  - mysql -h 127.0.0.1 -u root -e "grant all on *.* to 'mysql'@'127.0.0.1';"
   - mysql -h 127.0.0.1 -u root -e "create user 'mysql2'@'127.0.0.1' identified by '123456';"
-  - mysql -h 127.0.0.1 -u root -e "grant all on *.* to 'mysql2'@'127.0.0.1' identified by '123456';"
+  - mysql -h 127.0.0.1 -u root -e "grant all on *.* to 'mysql2'@'127.0.0.1';"
+
 
 install:
-  - set -e
-  - git clone -b devel --depth 1 https://github.com/nim-lang/Nim.git
-  - cd Nim
-  - git clone --depth 1 https://github.com/nim-lang/csources.git
-  - cd csources
-  - sh build.sh
-  - cd ..
-  - bin/nim c koch
-  - ./koch boot -d:release
-  - ./koch nimble
-  - export PATH=$(pwd)/bin:$PATH
-  - cd ..
-  - nimble install -y
+  - export CHOOSENIM_NO_ANALYTICS=1
+  - curl https://nim-lang.org/choosenim/init.sh -sSf > init.sh
+  - sh init.sh -y
+  - export PATH=~/.nimble/bin:$PATH
+  - echo "export PATH=~/.nimble/bin:$PATH" >> ~/.profile
+  - choosenim $CHANNEL
+  - nimble install -d -y
 
 script:
-  - nim test
+  - nimble test --verbose
   
   

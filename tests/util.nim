@@ -4,7 +4,7 @@
 #    See the file "LICENSE", included in this distribution, for
 #    details about the copyright.
 
-import asyncdispatch, asyncnet, net, strutils
+import asyncdispatch, strutils
 
 proc waitFor1*(fut: Future[void]) =
   proc check() {.async.} =
