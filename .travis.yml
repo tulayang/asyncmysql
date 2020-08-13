@@ -20,7 +20,7 @@ matrix:
     # Ignore failures when building against the devel Nim branch
     # Also ignore OSX, due to very long build queue
     - os: osx
-  fast_finish: true
+  # fast_finish: true
 
 before_script:
   - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
