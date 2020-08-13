@@ -21,9 +21,13 @@ matrix:
   fast_finish: true
 
 before_install:
-  - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
-      HOMEBREW_NO_AUTO_UPDATE=1 brew install mysql;
-    fi
+  # osx   - MySQL      - 5.7.21
+  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then brew update-reset                                                                            ; fi
+  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then brew install mysql                                                                           ; fi
+  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then brew services start mysql                                                                    ; fi
+  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then sudo chown -R _mysql:_mysql /usr/local/opt/mysql/                                            ; fi
+  - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then mysql.server start                                                                           ; fi
+  # - if [[ "$TRAVIS_OS_NAME" == osx   ]]; then sleep 0.1                                                                                    ; fi
 
 before_script:
   - if [[ $TRAVIS_OS_NAME == 'osx' ]]; then 
