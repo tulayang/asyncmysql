@@ -1,4 +1,4 @@
-import ospaths, strutils
+import os, strutils
 
 proc reGenDoc(filename: string) =
   writeFile(filename,
